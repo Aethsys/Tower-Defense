@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -29,11 +30,18 @@ public class EnemyMovement : NetworkBehaviour
         NetworkVariableWritePermission.Server
     );
 
+    private Transform selfTransform;
     private TowerHealth targetTower;
     private Transform targetTransform;
     private float attackTimer;
     private float targetSearchTimer;
     private bool isInAttackRange;
+
+    private void Awake()
+    {
+        useGUILayout = false;
+        selfTransform = transform;
+    }
 
     public override void OnNetworkSpawn()
     {
@@ -43,13 +51,13 @@ public class EnemyMovement : NetworkBehaviour
 
         if (IsServer)
         {
-            netPosition.Value = transform.position;
-            netRotation.Value = transform.rotation;
+            netPosition.Value = selfTransform.position;
+            netRotation.Value = selfTransform.rotation;
             FindTargetTower();
         }
         else
         {
-            transform.SetPositionAndRotation(netPosition.Value, netRotation.Value);
+            selfTransform.SetPositionAndRotation(netPosition.Value, netRotation.Value);
         }
     }
 
@@ -88,13 +96,13 @@ public class EnemyMovement : NetworkBehaviour
 
     private void SyncServerNetworkState()
     {
-        Vector3 currentPos = transform.position;
+        Vector3 currentPos = selfTransform.position;
         if ((netPosition.Value - currentPos).sqrMagnitude > 0.0001f)
         {
             netPosition.Value = currentPos;
         }
 
-        Quaternion currentRot = transform.rotation;
+        Quaternion currentRot = selfTransform.rotation;
         if (Quaternion.Angle(netRotation.Value, currentRot) > 0.1f)
         {
             netRotation.Value = currentRot;
@@ -119,33 +127,39 @@ public class EnemyMovement : NetworkBehaviour
             }
         }
 
-        Vector3 currentPos = transform.position;
-        Vector3 targetPos = new Vector3(targetTransform.position.x, currentPos.y, targetTransform.position.z);
+        float dt = Time.deltaTime;
+        Vector3 currentPos = selfTransform.position;
+        Vector3 targetWorldPos = targetTransform.position;
+        Vector3 targetPos = new Vector3(targetWorldPos.x, currentPos.y, targetWorldPos.z);
         Vector3 toTarget = targetPos - currentPos;
         float sqrDistanceToTarget = toTarget.sqrMagnitude;
         float sqrAttackRange = attackRange * attackRange;
 
+        Quaternion nextRotation = selfTransform.rotation;
         if (sqrDistanceToTarget > 0.0001f)
         {
             Quaternion desiredRotation = Quaternion.LookRotation(toTarget, Vector3.up);
-            transform.rotation = Quaternion.Slerp(transform.rotation, desiredRotation, rotationSpeed * Time.deltaTime);
+            nextRotation = Quaternion.Slerp(nextRotation, desiredRotation, rotationSpeed * dt);
         }
 
         if (sqrDistanceToTarget > sqrAttackRange)
         {
             isInAttackRange = false;
             attackTimer = firstAttackDelay;
-            transform.position = Vector3.MoveTowards(currentPos, targetPos, moveSpeed * Time.deltaTime);
+            Vector3 nextPos = Vector3.MoveTowards(currentPos, targetPos, moveSpeed * dt);
+            selfTransform.SetPositionAndRotation(nextPos, nextRotation);
         }
         else
         {
+            selfTransform.rotation = nextRotation;
+
             if (!isInAttackRange)
             {
                 isInAttackRange = true;
                 attackTimer = firstAttackDelay;
             }
 
-            attackTimer -= Time.deltaTime;
+            attackTimer -= dt;
             if (attackTimer <= 0f)
             {
                 AttackTower();
@@ -172,14 +186,14 @@ public class EnemyMovement : NetworkBehaviour
 
     private void FindTargetTower()
     {
-        TowerHealth[] towers = FindObjectsByType<TowerHealth>();
         TowerHealth closestTower = null;
         float closestSqrDistance = float.MaxValue;
-        Vector3 myPos = transform.position;
+        Vector3 myPos = selfTransform.position;
 
-        for (int i = 0; i < towers.Length; i++)
+        List<TowerHealth> activeTowers = TowerHealth.ActiveTowers;
+        for (int i = 0; i < activeTowers.Count; i++)
         {
-            TowerHealth tower = towers[i];
+            TowerHealth tower = activeTowers[i];
             if (tower == null || tower.IsDestroyed)
             {
                 continue;
@@ -190,6 +204,26 @@ public class EnemyMovement : NetworkBehaviour
             {
                 closestSqrDistance = sqrDist;
                 closestTower = tower;
+            }
+        }
+
+        if (closestTower == null)
+        {
+            TowerHealth[] towers = FindObjectsByType<TowerHealth>();
+            for (int i = 0; i < towers.Length; i++)
+            {
+                TowerHealth tower = towers[i];
+                if (tower == null || tower.IsDestroyed)
+                {
+                    continue;
+                }
+
+                float sqrDist = (tower.transform.position - myPos).sqrMagnitude;
+                if (sqrDist < closestSqrDistance)
+                {
+                    closestSqrDistance = sqrDist;
+                    closestTower = tower;
+                }
             }
         }
 
@@ -220,7 +254,9 @@ public class EnemyMovement : NetworkBehaviour
 
     private void SyncClientTransform()
     {
-        transform.position = Vector3.Lerp(transform.position, netPosition.Value, Time.deltaTime * networkLerpSpeed);
-        transform.rotation = Quaternion.Slerp(transform.rotation, netRotation.Value, Time.deltaTime * networkLerpSpeed);
+        float t = Time.deltaTime * networkLerpSpeed;
+        Vector3 nextPos = Vector3.Lerp(selfTransform.position, netPosition.Value, t);
+        Quaternion nextRot = Quaternion.Slerp(selfTransform.rotation, netRotation.Value, t);
+        selfTransform.SetPositionAndRotation(nextPos, nextRot);
     }
 }

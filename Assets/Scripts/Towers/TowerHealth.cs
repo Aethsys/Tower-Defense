@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using TMPro;
 using Unity.Netcode;
@@ -10,6 +11,12 @@ using UnityEngine.UI;
 [RequireComponent(typeof(NetworkObject))]
 public class TowerHealth : NetworkBehaviour
 {
+    public static readonly List<TowerHealth> ActiveTowers = new List<TowerHealth>(8);
+
+    private static Camera cachedLocalCamera;
+    private static Transform cachedLocalCameraTransform;
+    private static int lastCameraLookupFrame = -1;
+
     [Header("Health Settings")]
     [SerializeField] private int maxHealth = 100;
     [SerializeField] private bool coreTower;
@@ -29,8 +36,9 @@ public class TowerHealth : NetworkBehaviour
     );
 
     private Transform healthTextTransform;
-    private Camera localCamera;
-    private Transform localCameraTransform;
+    private GameObject runtimeBlackScreenCanvas;
+    private Image runtimeOverlayImage;
+    private int lastDisplayedHealth = int.MinValue;
     private bool isReturningToLobby;
     private bool isShowingBlackScreen;
     private bool isApplicationQuitting;
@@ -50,6 +58,8 @@ public class TowerHealth : NetworkBehaviour
 
     private void Awake()
     {
+        useGUILayout = false;
+
         if (healthText == null)
         {
             healthText = GetComponentInChildren<TMP_Text>(true);
@@ -59,6 +69,19 @@ public class TowerHealth : NetworkBehaviour
         {
             healthTextTransform = healthText.transform;
         }
+    }
+
+    private void OnEnable()
+    {
+        if (!ActiveTowers.Contains(this))
+        {
+            ActiveTowers.Add(this);
+        }
+    }
+
+    private void OnDisable()
+    {
+        ActiveTowers.Remove(this);
     }
 
     private void Start()
@@ -94,32 +117,42 @@ public class TowerHealth : NetworkBehaviour
         }
     }
 
-    private Transform GetLocalActiveCameraTransform()
+    private static Transform GetLocalActiveCameraTransform()
     {
-        if (localCamera != null && localCamera.isActiveAndEnabled)
+        if (cachedLocalCamera != null && cachedLocalCamera.isActiveAndEnabled)
         {
-            return localCameraTransform;
+            return cachedLocalCameraTransform;
         }
 
+        int currentFrame = Time.frameCount;
+        if (lastCameraLookupFrame == currentFrame)
+        {
+            return null;
+        }
+        lastCameraLookupFrame = currentFrame;
+
         if (NetworkManager.Singleton != null &&
-            NetworkManager.Singleton.SpawnManager != null &&
-            NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject() != null)
+            NetworkManager.Singleton.SpawnManager != null)
         {
             NetworkObject localPlayer = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();
-            localCamera = localPlayer.GetComponentInChildren<Camera>(false);
-            if (localCamera != null && localCamera.isActiveAndEnabled)
+            if (localPlayer != null)
             {
-                localCameraTransform = localCamera.transform;
-                return localCameraTransform;
+                Camera playerCam = localPlayer.GetComponentInChildren<Camera>(false);
+                if (playerCam != null && playerCam.isActiveAndEnabled)
+                {
+                    cachedLocalCamera = playerCam;
+                    cachedLocalCameraTransform = playerCam.transform;
+                    return cachedLocalCameraTransform;
+                }
             }
         }
 
         Camera mainCam = Camera.main;
         if (mainCam != null && mainCam.isActiveAndEnabled)
         {
-            localCamera = mainCam;
-            localCameraTransform = mainCam.transform;
-            return localCameraTransform;
+            cachedLocalCamera = mainCam;
+            cachedLocalCameraTransform = mainCam.transform;
+            return cachedLocalCameraTransform;
         }
 
         return null;
@@ -213,7 +246,6 @@ public class TowerHealth : NetworkBehaviour
 
         isReturningToLobby = true;
 
-        // First fade the screen to black before stopping waves or transitioning to the Lobby.
         await ShowBlackScreenAsync();
 
         if (isApplicationQuitting || !Application.isPlaying || Application.exitCancellationToken.IsCancellationRequested)
@@ -274,25 +306,37 @@ public class TowerHealth : NetworkBehaviour
         }
         else
         {
-            GameObject canvasObj = new GameObject("BlackScreenOverlayCanvas");
-            Canvas overlayCanvas = canvasObj.AddComponent<Canvas>();
-            overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            overlayCanvas.sortingOrder = 999;
-            canvasObj.AddComponent<CanvasScaler>();
-            canvasObj.AddComponent<GraphicRaycaster>();
+            if (runtimeBlackScreenCanvas == null)
+            {
+                runtimeBlackScreenCanvas = new GameObject("BlackScreenOverlayCanvas");
+                Canvas overlayCanvas = runtimeBlackScreenCanvas.AddComponent<Canvas>();
+                overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                overlayCanvas.sortingOrder = 999;
+                runtimeBlackScreenCanvas.AddComponent<CanvasScaler>();
+                runtimeBlackScreenCanvas.AddComponent<GraphicRaycaster>();
 
-            GameObject imageObj = new GameObject("BlackScreenImage");
-            imageObj.transform.SetParent(canvasObj.transform, false);
+                GameObject imageObj = new GameObject("BlackScreenImage");
+                imageObj.transform.SetParent(runtimeBlackScreenCanvas.transform, false);
 
-            RectTransform rect = imageObj.AddComponent<RectTransform>();
-            rect.anchorMin = Vector2.zero;
-            rect.anchorMax = Vector2.one;
-            rect.offsetMin = Vector2.zero;
-            rect.offsetMax = Vector2.zero;
+                RectTransform rect = imageObj.AddComponent<RectTransform>();
+                rect.anchorMin = Vector2.zero;
+                rect.anchorMax = Vector2.one;
+                rect.offsetMin = Vector2.zero;
+                rect.offsetMax = Vector2.zero;
 
-            overlayImage = imageObj.AddComponent<Image>();
-            overlayImage.color = new Color(0f, 0f, 0f, fadeToBlackDuration > 0f ? 0f : 1f);
-            overlayImage.raycastTarget = true;
+                runtimeOverlayImage = imageObj.AddComponent<Image>();
+                runtimeOverlayImage.raycastTarget = true;
+            }
+            else
+            {
+                runtimeBlackScreenCanvas.SetActive(true);
+            }
+
+            overlayImage = runtimeOverlayImage;
+            if (overlayImage != null)
+            {
+                overlayImage.color = new Color(0f, 0f, 0f, fadeToBlackDuration > 0f ? 0f : 1f);
+            }
         }
 
         if (overlayImage != null && fadeToBlackDuration > 0f)
@@ -320,9 +364,10 @@ public class TowerHealth : NetworkBehaviour
 
     private void UpdateHealthUI(int healthValue)
     {
-        if (healthText != null)
+        if (healthText != null && lastDisplayedHealth != healthValue)
         {
-            healthText.text = healthValue.ToString();
+            lastDisplayedHealth = healthValue;
+            healthText.SetText("{0}", healthValue);
         }
     }
 }

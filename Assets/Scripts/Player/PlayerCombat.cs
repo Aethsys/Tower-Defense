@@ -11,10 +11,13 @@ public class PlayerCombat : NetworkBehaviour
     [SerializeField] private Transform cameraTransform;
 
     private InputSystem_Actions inputActions;
+    private InputAction attackAction;
     private bool isGameplayScene;
 
     private void Awake()
     {
+        useGUILayout = false;
+
         if (weaponManager == null)
         {
             weaponManager = GetComponent<WeaponManager>();
@@ -35,12 +38,27 @@ public class PlayerCombat : NetworkBehaviour
         }
 
         inputActions = new InputSystem_Actions();
+        attackAction = inputActions.Player.Attack;
         RefreshSceneState(SceneManager.GetActiveScene().name);
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        base.OnNetworkSpawn();
+
+        if (!IsOwner)
+        {
+            inputActions?.Player.Disable();
+        }
     }
 
     private void OnEnable()
     {
-        inputActions?.Player.Enable();
+        if (!IsSpawned || IsOwner)
+        {
+            inputActions?.Player.Enable();
+        }
+
         SceneManager.sceneLoaded += OnSceneLoaded;
         RefreshSceneState(SceneManager.GetActiveScene().name);
     }
@@ -84,41 +102,50 @@ public class PlayerCombat : NetworkBehaviour
             return;
         }
 
-        if (weaponManager == null || weaponManager.ActiveWeapon == null)
+        if (weaponManager == null)
         {
             return;
         }
 
-        HandleCombatInput();
+        WeaponBase activeWeapon = weaponManager.ActiveWeapon;
+        if (activeWeapon == null)
+        {
+            return;
+        }
+
+        HandleCombatInput(activeWeapon);
     }
 
-    private void HandleCombatInput()
+    private void HandleCombatInput(WeaponBase activeWeapon)
     {
-        WeaponBase activeWeapon = weaponManager.ActiveWeapon;
-
-        // Primary Action (Left Click / Gamepad Attack)
-        bool primaryPressed = inputActions.Player.Attack.WasPressedThisFrame();
-        bool primaryHeld = inputActions.Player.Attack.IsPressed();
+        bool primaryPressed = attackAction.WasPressedThisFrame();
+        bool primaryHeld = attackAction.IsPressed();
 
         if (primaryPressed || primaryHeld)
         {
             activeWeapon.TryUsePrimary(primaryPressed, primaryHeld);
         }
 
-        // Secondary Action (Right Click / Gamepad Left Trigger)
         bool secondaryPressed = false;
         bool secondaryHeld = false;
 
-        if (Mouse.current != null)
+        Mouse mouse = Mouse.current;
+        if (mouse != null)
         {
-            secondaryPressed = Mouse.current.rightButton.wasPressedThisFrame;
-            secondaryHeld = Mouse.current.rightButton.isPressed;
+            var rightButton = mouse.rightButton;
+            secondaryPressed = rightButton.wasPressedThisFrame;
+            secondaryHeld = rightButton.isPressed;
         }
 
-        if (!secondaryPressed && !secondaryHeld && Gamepad.current != null)
+        if (!secondaryPressed && !secondaryHeld)
         {
-            secondaryPressed = Gamepad.current.leftTrigger.wasPressedThisFrame;
-            secondaryHeld = Gamepad.current.leftTrigger.isPressed;
+            Gamepad gamepad = Gamepad.current;
+            if (gamepad != null)
+            {
+                var leftTrigger = gamepad.leftTrigger;
+                secondaryPressed = leftTrigger.wasPressedThisFrame;
+                secondaryHeld = leftTrigger.isPressed;
+            }
         }
 
         if (secondaryPressed || secondaryHeld)

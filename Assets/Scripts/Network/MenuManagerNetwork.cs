@@ -24,8 +24,14 @@ public class MenuManagerNetwork : MonoBehaviour
     [SerializeField] private float fadeToBlackDuration = 0.2f;
 
     private GameObject runtimeBlackScreenCanvas;
+    private Image runtimeOverlayImage;
     private bool isBusy;
     private bool isApplicationQuitting;
+
+    private void Awake()
+    {
+        useGUILayout = false;
+    }
 
     private void OnApplicationQuit()
     {
@@ -77,11 +83,8 @@ public class MenuManagerNetwork : MonoBehaviour
                 MaxPlayers = maxPlayers
             }.WithRelayNetwork();
 
-            // CreateSessionAsync with WithRelayNetwork() configures the transport and
-            // automatically starts Netcode for GameObjects as Host.
             CurrentSession = await MultiplayerService.Instance.CreateSessionAsync(options);
             SessionCode = CurrentSession.Code;
-            Debug.Log($"Session created successfully. Code: {SessionCode}");
 
             if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost)
             {
@@ -136,15 +139,11 @@ public class MenuManagerNetwork : MonoBehaviour
             string cleanCode = sessionCode.Trim().ToUpperInvariant();
             SessionCode = cleanCode;
 
-            // JoinSessionByCodeAsync connects to the session Relay and
-            // automatically starts Netcode for GameObjects as Client.
-            // NetworkSceneManager automatically synchronizes the Lobby scene with the Host.
             CurrentSession = await MultiplayerService.Instance.JoinSessionByCodeAsync(cleanCode);
             if (!string.IsNullOrEmpty(CurrentSession?.Code))
             {
                 SessionCode = CurrentSession.Code;
             }
-            Debug.Log($"Joined session successfully. Code: {SessionCode}");
         }
         catch (Exception e)
         {
@@ -193,15 +192,15 @@ public class MenuManagerNetwork : MonoBehaviour
                 rect.offsetMin = Vector2.zero;
                 rect.offsetMax = Vector2.zero;
 
-                overlayImage = imageObj.AddComponent<Image>();
-                overlayImage.raycastTarget = true;
+                runtimeOverlayImage = imageObj.AddComponent<Image>();
+                runtimeOverlayImage.raycastTarget = true;
             }
             else
             {
                 runtimeBlackScreenCanvas.SetActive(true);
-                overlayImage = runtimeBlackScreenCanvas.GetComponentInChildren<Image>();
             }
 
+            overlayImage = runtimeOverlayImage;
             if (overlayImage != null)
             {
                 overlayImage.color = new Color(0f, 0f, 0f, fadeToBlackDuration > 0f ? 0f : 1f);

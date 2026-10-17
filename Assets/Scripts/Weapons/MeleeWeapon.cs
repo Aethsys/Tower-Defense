@@ -24,6 +24,11 @@ public class MeleeWeapon : WeaponBase
     public event Action<MeleeAttackProfile> OnSecondaryAttackPerformed;
     public event Action<EnemyHealth, int> OnTargetDamaged;
 
+    private void Awake()
+    {
+        useGUILayout = false;
+    }
+
     public override bool TryUsePrimary(bool wasPressedThisFrame, bool isHeld)
     {
         if (weaponData == null)
@@ -86,7 +91,6 @@ public class MeleeWeapon : WeaponBase
         HitEnemiesSet.Clear();
         int targetsHit = 0;
 
-        // 1. Check colliders already overlapping the starting sphere at camera origin.
         int overlapCount = Physics.OverlapSphereNonAlloc(origin, radius, OverlapBuffer, mask, QueryTriggerInteraction.Collide);
         for (int i = 0; i < overlapCount && targetsHit < maxTargets; i++)
         {
@@ -101,7 +105,6 @@ public class MeleeWeapon : WeaponBase
             return;
         }
 
-        // 2. SphereCast forward along the crosshair direction.
         int hitCount = Physics.SphereCastNonAlloc(origin, radius, direction, HitBuffer, range, mask, QueryTriggerInteraction.Collide);
         if (hitCount > 0)
         {
@@ -118,27 +121,18 @@ public class MeleeWeapon : WeaponBase
 
     private bool TryDamageCollider(Collider col, int damage)
     {
-        if (col == null)
+        if (!EnemyHealth.TryGetEnemy(col, out EnemyHealth enemy))
         {
             return false;
         }
 
-        if (OwnerRoot != null && col.transform.IsChildOf(OwnerRoot))
-        {
-            return false;
-        }
-
-        EnemyHealth enemy = col.GetComponentInParent<EnemyHealth>();
-        if (enemy == null)
-        {
-            enemy = col.GetComponent<EnemyHealth>();
-        }
-
-        if (enemy != null && !enemy.IsDead && HitEnemiesSet.Add(enemy))
+        if (!enemy.IsDead && HitEnemiesSet.Add(enemy))
         {
             enemy.TakeDamage(damage);
             OnTargetDamaged?.Invoke(enemy, damage);
-            Debug.Log($"[{WeaponName}] Hit {enemy.name} for {damage} damage. Remaining HP: {enemy.CurrentHealth}/{enemy.MaxHealth}");
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log($"[{WeaponName}] Hit {enemy.name} for {damage} damage.");
+#endif
             return true;
         }
 

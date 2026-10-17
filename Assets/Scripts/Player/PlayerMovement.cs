@@ -25,14 +25,22 @@ public class PlayerMovement : NetworkBehaviour
     [SerializeField] private float mouseSensitivity = 0.15f;
     [SerializeField] private float maxLookAngle = 85f;
 
+    private Transform selfTransform;
     private CharacterController characterController;
     private InputSystem_Actions inputActions;
+    private InputAction moveAction;
+    private InputAction lookAction;
+    private InputAction jumpAction;
+    private InputAction sprintAction;
+    private InputAction crouchAction;
 
     private Vector3 verticalVelocity;
     private float xRotation;
     private float initialCameraLocalYaw;
     private float standingCameraY = 0.5f;
     private float crouchCameraY = 0.05f;
+    private float jumpVelocity;
+    private float crouchScaleRatio;
     private bool isCrouching;
     private bool isGameplayScene;
     private bool hasInitializedGameplayPosition;
@@ -48,10 +56,13 @@ public class PlayerMovement : NetworkBehaviour
 
     private void Awake()
     {
+        useGUILayout = false;
+        selfTransform = transform;
         characterController = GetComponent<CharacterController>();
-        if (characterController != null)
+
+        if (characterController != null && characterController.height > 0f)
         {
-            standingHeight = characterController.height > 0f ? characterController.height : 2f;
+            standingHeight = characterController.height;
         }
 
         if (cameraTransform == null)
@@ -70,13 +81,37 @@ public class PlayerMovement : NetworkBehaviour
             crouchCameraY = standingCameraY - ((standingHeight - crouchHeight) * 0.5f);
         }
 
+        jumpVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
+        crouchScaleRatio = standingHeight > 0.01f ? (crouchHeight / standingHeight) : 0.55f;
+
         inputActions = new InputSystem_Actions();
+        var playerMap = inputActions.Player;
+        moveAction = playerMap.Move;
+        lookAction = playerMap.Look;
+        jumpAction = playerMap.Jump;
+        sprintAction = playerMap.Sprint;
+        crouchAction = playerMap.Crouch;
+
         RefreshSceneState(SceneManager.GetActiveScene().name);
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        base.OnNetworkSpawn();
+
+        if (!IsOwner)
+        {
+            inputActions?.Player.Disable();
+        }
     }
 
     private void OnEnable()
     {
-        inputActions?.Player.Enable();
+        if (!IsSpawned || IsOwner)
+        {
+            inputActions?.Player.Enable();
+        }
+
         SceneManager.sceneLoaded += OnSceneLoaded;
         RefreshSceneState(SceneManager.GetActiveScene().name);
     }
@@ -112,7 +147,7 @@ public class PlayerMovement : NetworkBehaviour
         if (!isGameplayScene)
         {
             isCrouching = false;
-            transform.localScale = Vector3.one;
+            selfTransform.localScale = Vector3.one;
             if (characterController != null)
             {
                 characterController.height = standingHeight;
@@ -146,8 +181,8 @@ public class PlayerMovement : NetworkBehaviour
 
             if (IsSpawned)
             {
-                netPosition.Value = transform.position;
-                netRotation.Value = transform.rotation;
+                netPosition.Value = selfTransform.position;
+                netRotation.Value = selfTransform.rotation;
                 netIsCrouching.Value = false;
             }
             hasInitializedGameplayPosition = true;
@@ -166,13 +201,13 @@ public class PlayerMovement : NetworkBehaviour
 
     private void SyncOwnerNetworkState()
     {
-        Vector3 currentPos = transform.position;
+        Vector3 currentPos = selfTransform.position;
         if ((netPosition.Value - currentPos).sqrMagnitude > 0.0001f)
         {
             netPosition.Value = currentPos;
         }
 
-        Quaternion currentRot = transform.rotation;
+        Quaternion currentRot = selfTransform.rotation;
         if (Quaternion.Angle(netRotation.Value, currentRot) > 0.05f)
         {
             netRotation.Value = currentRot;
@@ -205,7 +240,7 @@ public class PlayerMovement : NetworkBehaviour
             return;
         }
 
-        Vector2 lookInput = inputActions.Player.Look.ReadValue<Vector2>();
+        Vector2 lookInput = lookAction.ReadValue<Vector2>();
 
         float mouseX = lookInput.x * mouseSensitivity;
         float mouseY = lookInput.y * mouseSensitivity;
@@ -217,12 +252,12 @@ public class PlayerMovement : NetworkBehaviour
             cameraTransform.localRotation = Quaternion.Euler(xRotation, initialCameraLocalYaw, 0f);
         }
 
-        transform.Rotate(0f, mouseX, 0f);
+        selfTransform.Rotate(0f, mouseX, 0f);
     }
 
     private void HandleCrouch()
     {
-        bool wantsToCrouch = inputActions.Player.Crouch.IsPressed();
+        bool wantsToCrouch = crouchAction.IsPressed();
 
         if (wantsToCrouch)
         {
@@ -233,12 +268,13 @@ public class PlayerMovement : NetworkBehaviour
             isCrouching = false;
         }
 
+        float dt = Time.deltaTime * crouchTransitionSpeed;
         float targetHeight = isCrouching ? crouchHeight : standingHeight;
         float currentHeight = characterController.height;
 
         if (Mathf.Abs(currentHeight - targetHeight) > 0.001f)
         {
-            float newHeight = Mathf.Lerp(currentHeight, targetHeight, Time.deltaTime * crouchTransitionSpeed);
+            float newHeight = Mathf.Lerp(currentHeight, targetHeight, dt);
             characterController.height = newHeight;
 
             float heightDifference = standingHeight - newHeight;
@@ -251,7 +287,7 @@ public class PlayerMovement : NetworkBehaviour
             Vector3 camLocalPos = cameraTransform.localPosition;
             if (Mathf.Abs(camLocalPos.y - targetCamY) > 0.001f)
             {
-                camLocalPos.y = Mathf.Lerp(camLocalPos.y, targetCamY, Time.deltaTime * crouchTransitionSpeed);
+                camLocalPos.y = Mathf.Lerp(camLocalPos.y, targetCamY, dt);
                 cameraTransform.localPosition = camLocalPos;
             }
         }
@@ -260,7 +296,7 @@ public class PlayerMovement : NetworkBehaviour
     private bool CanStandUp()
     {
         float checkDistance = standingHeight - crouchHeight;
-        Vector3 origin = transform.position + Vector3.up * (crouchHeight * 0.5f);
+        Vector3 origin = selfTransform.position + new Vector3(0f, crouchHeight * 0.5f, 0f);
         float radius = characterController.radius * 0.9f;
 
         return !Physics.SphereCast(origin, radius, Vector3.up, out _, checkDistance, ~0, QueryTriggerInteraction.Ignore);
@@ -275,54 +311,65 @@ public class PlayerMovement : NetworkBehaviour
             verticalVelocity.y = -2f;
         }
 
-        Vector2 moveInput = inputActions.Player.Move.ReadValue<Vector2>();
-        bool isSprinting = inputActions.Player.Sprint.IsPressed() && !isCrouching;
+        Vector2 moveInput = moveAction.ReadValue<Vector2>();
+        bool isSprinting = sprintAction.IsPressed() && !isCrouching;
 
-        float currentSpeed = walkSpeed;
-        if (isCrouching)
+        float currentSpeed = isCrouching ? crouchSpeed : (isSprinting ? sprintSpeed : walkSpeed);
+
+        Transform referenceTransform = cameraTransform != null ? cameraTransform : selfTransform;
+        Vector3 forward = referenceTransform.forward;
+        forward.y = 0f;
+        float fwdSqr = forward.sqrMagnitude;
+        if (fwdSqr > 0.0001f)
         {
-            currentSpeed = crouchSpeed;
-        }
-        else if (isSprinting)
-        {
-            currentSpeed = sprintSpeed;
+            forward *= 1f / Mathf.Sqrt(fwdSqr);
         }
 
-        Transform referenceTransform = cameraTransform != null ? cameraTransform : transform;
-        Vector3 forward = Vector3.ProjectOnPlane(referenceTransform.forward, Vector3.up).normalized;
-        Vector3 right = Vector3.ProjectOnPlane(referenceTransform.right, Vector3.up).normalized;
+        Vector3 right = referenceTransform.right;
+        right.y = 0f;
+        float rightSqr = right.sqrMagnitude;
+        if (rightSqr > 0.0001f)
+        {
+            right *= 1f / Mathf.Sqrt(rightSqr);
+        }
 
         Vector3 moveDirection = right * moveInput.x + forward * moveInput.y;
-        if (moveDirection.sqrMagnitude > 1f)
+        float moveSqr = moveDirection.sqrMagnitude;
+        if (moveSqr > 1f)
         {
-            moveDirection.Normalize();
+            moveDirection *= 1f / Mathf.Sqrt(moveSqr);
         }
 
-        if (inputActions.Player.Jump.WasPressedThisFrame() && isGrounded && !isCrouching)
+        if (jumpAction.WasPressedThisFrame() && isGrounded && !isCrouching)
         {
-            verticalVelocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
+            verticalVelocity.y = jumpVelocity;
         }
 
-        verticalVelocity.y += gravity * Time.deltaTime;
+        float dt = Time.deltaTime;
+        verticalVelocity.y += gravity * dt;
 
-        Vector3 totalVelocity = moveDirection * currentSpeed + verticalVelocity;
-        characterController.Move(totalVelocity * Time.deltaTime);
+        Vector3 totalDisplacement = (moveDirection * currentSpeed + verticalVelocity) * dt;
+        characterController.Move(totalDisplacement);
     }
 
     private void ApplyRemoteState()
     {
+        float dt = Time.deltaTime;
+
         if (netPosition.Value != Vector3.zero)
         {
-            transform.position = Vector3.Lerp(transform.position, netPosition.Value, Time.deltaTime * 15f);
-            transform.rotation = Quaternion.Slerp(transform.rotation, netRotation.Value, Time.deltaTime * 15f);
+            float lerpFactor = dt * 15f;
+            Vector3 nextPos = Vector3.Lerp(selfTransform.position, netPosition.Value, lerpFactor);
+            Quaternion nextRot = Quaternion.Slerp(selfTransform.rotation, netRotation.Value, lerpFactor);
+            selfTransform.SetPositionAndRotation(nextPos, nextRot);
         }
 
-        float targetScaleY = netIsCrouching.Value ? (crouchHeight / standingHeight) : 1f;
-        Vector3 currentScale = transform.localScale;
+        float targetScaleY = netIsCrouching.Value ? crouchScaleRatio : 1f;
+        Vector3 currentScale = selfTransform.localScale;
         if (Mathf.Abs(currentScale.y - targetScaleY) > 0.001f)
         {
-            currentScale.y = Mathf.Lerp(currentScale.y, targetScaleY, Time.deltaTime * crouchTransitionSpeed);
-            transform.localScale = currentScale;
+            currentScale.y = Mathf.Lerp(currentScale.y, targetScaleY, dt * crouchTransitionSpeed);
+            selfTransform.localScale = currentScale;
         }
     }
 }

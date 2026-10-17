@@ -1,10 +1,13 @@
 using System;
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
 [RequireComponent(typeof(NetworkObject))]
 public class EnemyHealth : NetworkBehaviour
 {
+    private static readonly Dictionary<Collider, EnemyHealth> ColliderToEnemyMap = new Dictionary<Collider, EnemyHealth>(64);
+
     [Header("Health Settings")]
     [SerializeField] private int maxHealth = 30;
 
@@ -14,6 +17,7 @@ public class EnemyHealth : NetworkBehaviour
         NetworkVariableWritePermission.Server
     );
 
+    private Collider[] cachedColliders;
     private bool isDead;
     private bool hasDespawned;
 
@@ -23,6 +27,59 @@ public class EnemyHealth : NetworkBehaviour
 
     public event Action<int, int> OnHealthChanged;
     public event Action<EnemyHealth> OnEnemyDied;
+
+    public static bool TryGetEnemy(Collider col, out EnemyHealth enemy)
+    {
+        if (col == null)
+        {
+            enemy = null;
+            return false;
+        }
+
+        if (ColliderToEnemyMap.TryGetValue(col, out enemy))
+        {
+            return enemy != null;
+        }
+
+        if (col.TryGetComponent(out enemy) || (enemy = col.GetComponentInParent<EnemyHealth>()) != null)
+        {
+            ColliderToEnemyMap[col] = enemy;
+            return true;
+        }
+
+        return false;
+    }
+
+    private void Awake()
+    {
+        useGUILayout = false;
+        cachedColliders = GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < cachedColliders.Length; i++)
+        {
+            Collider col = cachedColliders[i];
+            if (col != null)
+            {
+                ColliderToEnemyMap[col] = this;
+            }
+        }
+    }
+
+    public override void OnDestroy()
+    {
+        if (cachedColliders != null)
+        {
+            for (int i = 0; i < cachedColliders.Length; i++)
+            {
+                Collider col = cachedColliders[i];
+                if (col != null)
+                {
+                    ColliderToEnemyMap.Remove(col);
+                }
+            }
+        }
+
+        base.OnDestroy();
+    }
 
     public override void OnNetworkSpawn()
     {

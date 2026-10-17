@@ -6,6 +6,8 @@ public class NetworkManagerPersistence : MonoBehaviour
 
     private void Awake()
     {
+        useGUILayout = false;
+
         if (instance != null && instance != this)
         {
             Destroy(gameObject);

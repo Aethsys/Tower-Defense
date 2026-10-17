@@ -15,6 +15,11 @@ public class WeaponManager : MonoBehaviour
 
     public event Action<WeaponBase> OnWeaponChanged;
 
+    private void Awake()
+    {
+        useGUILayout = false;
+    }
+
     public void Initialize(Transform ownerRoot, Transform cameraOrAimOrigin)
     {
         if (cameraOrAimOrigin != null)

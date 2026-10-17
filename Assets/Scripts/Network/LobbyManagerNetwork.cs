@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using TMPro;
 using Unity.Netcode;
@@ -29,10 +28,15 @@ public class LobbyManagerNetwork : MonoBehaviour
     private static readonly Comparison<NetworkObject> CompareByOwnerClientId =
         (a, b) => a.OwnerClientId.CompareTo(b.OwnerClientId);
 
+    private static readonly Comparison<Transform> CompareTransformByName =
+        (a, b) => string.CompareOrdinal(a.name, b.name);
+
     private readonly List<NetworkObject> playerObjectsBuffer = new List<NetworkObject>(4);
     private readonly HashSet<ulong> configuredPlayerObjectIds = new HashSet<ulong>();
 
     private AudioListener lobbyAudioListener;
+    private GameObject runtimeBlackScreenCanvas;
+    private Image runtimeOverlayImage;
     private string lastDisplayedCode;
     private bool isLeaving;
     private bool isStarting;
@@ -45,6 +49,8 @@ public class LobbyManagerNetwork : MonoBehaviour
 
     private void Awake()
     {
+        useGUILayout = false;
+
         if (lobbyCamera == null)
         {
             GameObject camObj = GameObject.Find("Main Camera");
@@ -136,10 +142,19 @@ public class LobbyManagerNetwork : MonoBehaviour
     private void AutoFindSpawnPoints()
     {
         Transform[] allTransforms = FindObjectsByType<Transform>();
-        spawnPoints = allTransforms
-            .Where(t => t.name.StartsWith("spawn", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(t => t.name)
-            .ToArray();
+        List<Transform> found = new List<Transform>(4);
+
+        for (int i = 0; i < allTransforms.Length; i++)
+        {
+            Transform t = allTransforms[i];
+            if (t != null && t.name.StartsWith("spawn", StringComparison.OrdinalIgnoreCase))
+            {
+                found.Add(t);
+            }
+        }
+
+        found.Sort(CompareTransformByName);
+        spawnPoints = found.ToArray();
     }
 
     private void UpdateSessionCodeUI()
@@ -199,7 +214,6 @@ public class LobbyManagerNetwork : MonoBehaviour
             return;
         }
 
-        // Return to the main menu if the Host disconnects or if the local client loses connection.
         if (NetworkManager.Singleton != null && !NetworkManager.Singleton.IsServer)
         {
             if (clientId == NetworkManager.Singleton.LocalClientId || clientId == NetworkManager.ServerClientId)
@@ -311,20 +325,19 @@ public class LobbyManagerNetwork : MonoBehaviour
             Transform spawn = GetSpawnPoint(i);
             if (spawn != null)
             {
-                if ((playerObj.transform.position - spawn.position).sqrMagnitude > 0.001f ||
-                    Quaternion.Angle(playerObj.transform.rotation, spawn.rotation) > 0.1f)
+                Transform playerTransform = playerObj.transform;
+                if ((playerTransform.position - spawn.position).sqrMagnitude > 0.001f ||
+                    Quaternion.Angle(playerTransform.rotation, spawn.rotation) > 0.1f)
                 {
-                    CharacterController cc = playerObj.GetComponent<CharacterController>();
-                    if (cc != null)
+                    if (playerObj.TryGetComponent(out CharacterController cc))
                     {
                         cc.enabled = false;
-                    }
-
-                    playerObj.transform.SetPositionAndRotation(spawn.position, spawn.rotation);
-
-                    if (cc != null)
-                    {
+                        playerTransform.SetPositionAndRotation(spawn.position, spawn.rotation);
                         cc.enabled = true;
+                    }
+                    else
+                    {
+                        playerTransform.SetPositionAndRotation(spawn.position, spawn.rotation);
                     }
                 }
             }
@@ -437,8 +450,6 @@ public class LobbyManagerNetwork : MonoBehaviour
         }
     }
 
-    private GameObject runtimeBlackScreenCanvas;
-
     private async Task ShowBlackScreenAsync()
     {
         if (isApplicationQuitting || !Application.isPlaying)
@@ -474,15 +485,15 @@ public class LobbyManagerNetwork : MonoBehaviour
                 rect.offsetMin = Vector2.zero;
                 rect.offsetMax = Vector2.zero;
 
-                overlayImage = imageObj.AddComponent<Image>();
-                overlayImage.raycastTarget = true;
+                runtimeOverlayImage = imageObj.AddComponent<Image>();
+                runtimeOverlayImage.raycastTarget = true;
             }
             else
             {
                 runtimeBlackScreenCanvas.SetActive(true);
-                overlayImage = runtimeBlackScreenCanvas.GetComponentInChildren<Image>();
             }
 
+            overlayImage = runtimeOverlayImage;
             if (overlayImage != null)
             {
                 overlayImage.color = new Color(0f, 0f, 0f, fadeToBlackDuration > 0f ? 0f : 1f);
@@ -509,7 +520,6 @@ public class LobbyManagerNetwork : MonoBehaviour
             overlayImage.color = new Color(baseColor.r, baseColor.g, baseColor.b, 1f);
         }
 
-        // Wait one extra frame with a fully opaque black screen before despawning or changing scenes.
         await Task.Yield();
     }
 

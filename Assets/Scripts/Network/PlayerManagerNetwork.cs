@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -14,11 +13,22 @@ public class PlayerManagerNetwork : MonoBehaviour
     private static readonly Comparison<NetworkObject> CompareByOwnerClientId =
         (a, b) => a.OwnerClientId.CompareTo(b.OwnerClientId);
 
+    private static readonly Comparison<Transform> CompareSpawnTransform = (a, b) =>
+    {
+        string parentA = a.parent != null ? a.parent.name : string.Empty;
+        string parentB = b.parent != null ? b.parent.name : string.Empty;
+        int parentCmp = string.CompareOrdinal(parentA, parentB);
+        return parentCmp != 0 ? parentCmp : string.CompareOrdinal(a.name, b.name);
+    };
+
     private readonly HashSet<ulong> positionedClientIds = new HashSet<ulong>();
     private readonly List<NetworkObject> playerObjectsBuffer = new List<NetworkObject>(4);
+    private bool needsCoordination = true;
 
     private void Awake()
     {
+        useGUILayout = false;
+
         if (spawnPoints == null || spawnPoints.Length == 0)
         {
             AutoFindSpawnPoints();
@@ -49,7 +59,10 @@ public class PlayerManagerNetwork : MonoBehaviour
 
     private void Update()
     {
-        CoordinatePlayersStartPositions(forceRepositionAll: false);
+        if (needsCoordination)
+        {
+            CoordinatePlayersStartPositions(forceRepositionAll: false);
+        }
     }
 
     private void OnDestroy()
@@ -70,11 +83,19 @@ public class PlayerManagerNetwork : MonoBehaviour
     private void AutoFindSpawnPoints()
     {
         Transform[] allTransforms = FindObjectsByType<Transform>();
-        spawnPoints = allTransforms
-            .Where(t => t.name.StartsWith("spawn", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(t => t.parent != null ? t.parent.name : string.Empty)
-            .ThenBy(t => t.name)
-            .ToArray();
+        List<Transform> found = new List<Transform>(4);
+
+        for (int i = 0; i < allTransforms.Length; i++)
+        {
+            Transform t = allTransforms[i];
+            if (t != null && t.name.StartsWith("spawn", StringComparison.OrdinalIgnoreCase))
+            {
+                found.Add(t);
+            }
+        }
+
+        found.Sort(CompareSpawnTransform);
+        spawnPoints = found.ToArray();
     }
 
     private void OnSceneLoadCompleted(string sceneName, LoadSceneMode loadSceneMode, List<ulong> clientsCompleted, List<ulong> clientsTimedOut)
@@ -100,6 +121,7 @@ public class PlayerManagerNetwork : MonoBehaviour
         }
 
         positionedClientIds.Remove(clientId);
+        needsCoordination = true;
         CoordinatePlayersStartPositions(forceRepositionAll: false);
     }
 
@@ -128,7 +150,6 @@ public class PlayerManagerNetwork : MonoBehaviour
             return;
         }
 
-        // Reuse the existing PlayerObject if it migrated from the Lobby scene.
         if (networkClient.PlayerObject != null)
         {
             return;
@@ -167,6 +188,7 @@ public class PlayerManagerNetwork : MonoBehaviour
         if (forceRepositionAll)
         {
             positionedClientIds.Clear();
+            needsCoordination = true;
         }
 
         playerObjectsBuffer.Clear();
@@ -184,29 +206,12 @@ public class PlayerManagerNetwork : MonoBehaviour
             return;
         }
 
-        if (!forceRepositionAll && positionedClientIds.Count >= playerObjectsBuffer.Count)
-        {
-            bool allPositioned = true;
-            for (int i = 0; i < playerObjectsBuffer.Count; i++)
-            {
-                if (!positionedClientIds.Contains(playerObjectsBuffer[i].OwnerClientId))
-                {
-                    allPositioned = false;
-                    break;
-                }
-            }
-
-            if (allPositioned)
-            {
-                return;
-            }
-        }
-
         if (playerObjectsBuffer.Count > 1)
         {
             playerObjectsBuffer.Sort(CompareByOwnerClientId);
         }
 
+        bool allPositioned = true;
         for (int i = 0; i < playerObjectsBuffer.Count; i++)
         {
             NetworkObject playerObj = playerObjectsBuffer[i];
@@ -222,6 +227,20 @@ public class PlayerManagerNetwork : MonoBehaviour
                     PlacePlayerAtSpawn(playerObj, spawn);
                 }
             }
+
+            if (!positionedClientIds.Contains(ownerId))
+            {
+                allPositioned = false;
+            }
+        }
+
+        int expectedPlayers = NetworkManager.Singleton.IsServer
+            ? NetworkManager.Singleton.ConnectedClientsIds.Count
+            : playerObjectsBuffer.Count;
+
+        if (allPositioned && positionedClientIds.Count >= expectedPlayers && expectedPlayers > 0)
+        {
+            needsCoordination = false;
         }
     }
 

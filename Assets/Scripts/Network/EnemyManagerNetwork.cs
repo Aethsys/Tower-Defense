@@ -1,7 +1,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -26,8 +25,11 @@ public class EnemyManagerNetwork : MonoBehaviour
     [SerializeField] private bool waitUntilWaveCleared = true;
 
     private static readonly WaitForSeconds WaitQuarterSecond = new WaitForSeconds(0.25f);
+    private static readonly Comparison<Transform> CompareTransformByName =
+        (a, b) => string.CompareOrdinal(a.name, b.name);
 
-    private readonly List<NetworkObject> activeEnemies = new List<NetworkObject>();
+    private readonly List<NetworkObject> activeEnemies = new List<NetworkObject>(32);
+    private readonly List<NetworkObject> validEnemyPrefabs = new List<NetworkObject>(8);
     private Coroutine waveRoutine;
     private bool wavesStarted;
     private int nextSpawnPointIndex;
@@ -54,6 +56,8 @@ public class EnemyManagerNetwork : MonoBehaviour
 
     private void Awake()
     {
+        useGUILayout = false;
+
         if (Instance != null && Instance != this)
         {
             Destroy(gameObject);
@@ -66,6 +70,8 @@ public class EnemyManagerNetwork : MonoBehaviour
         {
             AutoFindEnemySpawnPoints();
         }
+
+        RebuildValidPrefabCache();
     }
 
     private void Start()
@@ -107,13 +113,39 @@ public class EnemyManagerNetwork : MonoBehaviour
         }
     }
 
+    private void RebuildValidPrefabCache()
+    {
+        validEnemyPrefabs.Clear();
+        if (enemyPrefabs == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < enemyPrefabs.Length; i++)
+        {
+            if (enemyPrefabs[i] != null)
+            {
+                validEnemyPrefabs.Add(enemyPrefabs[i]);
+            }
+        }
+    }
+
     private void AutoFindEnemySpawnPoints()
     {
         Transform[] allTransforms = FindObjectsByType<Transform>();
-        spawnPoints = allTransforms
-            .Where(t => t != null && t.name.IndexOf("EnemySpawn", StringComparison.OrdinalIgnoreCase) >= 0)
-            .OrderBy(t => t.name)
-            .ToArray();
+        List<Transform> found = new List<Transform>(8);
+
+        for (int i = 0; i < allTransforms.Length; i++)
+        {
+            Transform t = allTransforms[i];
+            if (t != null && t.name.IndexOf("EnemySpawn", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                found.Add(t);
+            }
+        }
+
+        found.Sort(CompareTransformByName);
+        spawnPoints = found.ToArray();
     }
 
     public void StartWaves()
@@ -167,7 +199,9 @@ public class EnemyManagerNetwork : MonoBehaviour
             IsSpawningWave = true;
 
             int enemiesThisWave = Mathf.Max(1, baseEnemiesPerWave + (CurrentWave - 1) * additionalEnemiesPerWave);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.Log($"[EnemyManagerNetwork] Starting Wave {CurrentWave} with {enemiesThisWave} enemies.");
+#endif
 
             for (int i = 0; i < enemiesThisWave; i++)
             {
@@ -196,7 +230,9 @@ public class EnemyManagerNetwork : MonoBehaviour
             }
         }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
         Debug.Log("[EnemyManagerNetwork] All waves completed.");
+#endif
         waveRoutine = null;
     }
 
@@ -204,7 +240,6 @@ public class EnemyManagerNetwork : MonoBehaviour
     {
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer)
         {
-            Debug.LogWarning("[EnemyManagerNetwork] Only the Server/Host can spawn enemies.");
             return null;
         }
 
@@ -257,40 +292,17 @@ public class EnemyManagerNetwork : MonoBehaviour
 
     private NetworkObject GetRandomEnemyPrefab()
     {
-        if (enemyPrefabs == null || enemyPrefabs.Length == 0)
+        if (validEnemyPrefabs.Count == 0)
         {
-            return null;
-        }
-
-        int validCount = 0;
-        for (int i = 0; i < enemyPrefabs.Length; i++)
-        {
-            if (enemyPrefabs[i] != null)
+            RebuildValidPrefabCache();
+            if (validEnemyPrefabs.Count == 0)
             {
-                validCount++;
+                return null;
             }
         }
 
-        if (validCount == 0)
-        {
-            return null;
-        }
-
-        int targetIndex = UnityEngine.Random.Range(0, validCount);
-        int currentValid = 0;
-        for (int i = 0; i < enemyPrefabs.Length; i++)
-        {
-            if (enemyPrefabs[i] != null)
-            {
-                if (currentValid == targetIndex)
-                {
-                    return enemyPrefabs[i];
-                }
-                currentValid++;
-            }
-        }
-
-        return null;
+        int index = UnityEngine.Random.Range(0, validEnemyPrefabs.Count);
+        return validEnemyPrefabs[index];
     }
 
     private Transform GetNextSpawnPoint()

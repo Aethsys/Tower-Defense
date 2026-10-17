@@ -15,20 +15,20 @@ MonoBehaviour:
   weaponName: Unarmed
   primaryAttack:
     damage: 10
-    range: 2.6
-    radius: 0.45
-    cooldown: 0.4
+    range: 2
+    radius: 0.5
+    cooldown: 0.5
     maxTargets: 1
     allowHoldToAttack: 0
     animationTrigger: PrimaryAttack
   secondaryAttack:
     damage: 20
-    range: 2.8
-    radius: 0.55
-    cooldown: 0.85
+    range: 3
+    radius: 0.5
+    cooldown: 1
     maxTargets: 1
     allowHoldToAttack: 0
     animationTrigger: SecondaryAttack
   hitLayers:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 128
