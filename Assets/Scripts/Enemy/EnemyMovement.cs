@@ -4,12 +4,12 @@ using UnityEngine;
 [RequireComponent(typeof(NetworkObject))]
 public class EnemyMovement : NetworkBehaviour
 {
-    [Header("Movimiento")]
+    [Header("Movement Settings")]
     [SerializeField] private float moveSpeed = 3.5f;
     [SerializeField] private float rotationSpeed = 10f;
     [SerializeField] private float networkLerpSpeed = 15f;
 
-    [Header("Ataque a la Torre")]
+    [Header("Tower Attack Settings")]
     [SerializeField] private int attackDamage = 10;
     [SerializeField] private float attackRange = 1.25f;
     [SerializeField] private float firstAttackDelay = 0.5f;
@@ -32,6 +32,7 @@ public class EnemyMovement : NetworkBehaviour
     private TowerHealth targetTower;
     private Transform targetTransform;
     private float attackTimer;
+    private float targetSearchTimer;
     private bool isInAttackRange;
 
     public override void OnNetworkSpawn()
@@ -81,8 +82,22 @@ public class EnemyMovement : NetworkBehaviour
 
         if (IsSpawned && IsServer)
         {
-            netPosition.Value = transform.position;
-            netRotation.Value = transform.rotation;
+            SyncServerNetworkState();
+        }
+    }
+
+    private void SyncServerNetworkState()
+    {
+        Vector3 currentPos = transform.position;
+        if ((netPosition.Value - currentPos).sqrMagnitude > 0.0001f)
+        {
+            netPosition.Value = currentPos;
+        }
+
+        Quaternion currentRot = transform.rotation;
+        if (Quaternion.Angle(netRotation.Value, currentRot) > 0.1f)
+        {
+            netRotation.Value = currentRot;
         }
     }
 
@@ -90,6 +105,13 @@ public class EnemyMovement : NetworkBehaviour
     {
         if (targetTransform == null || (targetTower != null && targetTower.IsDestroyed))
         {
+            targetSearchTimer -= Time.deltaTime;
+            if (targetSearchTimer > 0f)
+            {
+                return;
+            }
+
+            targetSearchTimer = 0.5f;
             FindTargetTower();
             if (targetTransform == null)
             {
@@ -100,15 +122,16 @@ public class EnemyMovement : NetworkBehaviour
         Vector3 currentPos = transform.position;
         Vector3 targetPos = new Vector3(targetTransform.position.x, currentPos.y, targetTransform.position.z);
         Vector3 toTarget = targetPos - currentPos;
-        float distanceToTarget = toTarget.magnitude;
+        float sqrDistanceToTarget = toTarget.sqrMagnitude;
+        float sqrAttackRange = attackRange * attackRange;
 
-        if (toTarget.sqrMagnitude > 0.0001f)
+        if (sqrDistanceToTarget > 0.0001f)
         {
-            Quaternion desiredRotation = Quaternion.LookRotation(toTarget.normalized, Vector3.up);
+            Quaternion desiredRotation = Quaternion.LookRotation(toTarget, Vector3.up);
             transform.rotation = Quaternion.Slerp(transform.rotation, desiredRotation, rotationSpeed * Time.deltaTime);
         }
 
-        if (distanceToTarget > attackRange)
+        if (sqrDistanceToTarget > sqrAttackRange)
         {
             isInAttackRange = false;
             attackTimer = firstAttackDelay;
@@ -152,15 +175,17 @@ public class EnemyMovement : NetworkBehaviour
         TowerHealth[] towers = FindObjectsByType<TowerHealth>();
         TowerHealth closestTower = null;
         float closestSqrDistance = float.MaxValue;
+        Vector3 myPos = transform.position;
 
-        foreach (TowerHealth tower in towers)
+        for (int i = 0; i < towers.Length; i++)
         {
+            TowerHealth tower = towers[i];
             if (tower == null || tower.IsDestroyed)
             {
                 continue;
             }
 
-            float sqrDist = (tower.transform.position - transform.position).sqrMagnitude;
+            float sqrDist = (tower.transform.position - myPos).sqrMagnitude;
             if (sqrDist < closestSqrDistance)
             {
                 closestSqrDistance = sqrDist;
@@ -175,13 +200,20 @@ public class EnemyMovement : NetworkBehaviour
             return;
         }
 
+        targetTower = null;
+        targetTransform = null;
+
         if (!string.IsNullOrEmpty(defaultTargetName))
         {
             GameObject fallbackObj = GameObject.Find(defaultTargetName);
             if (fallbackObj != null)
             {
-                targetTransform = fallbackObj.transform;
-                targetTower = fallbackObj.GetComponent<TowerHealth>();
+                TowerHealth fallbackTower = fallbackObj.GetComponent<TowerHealth>();
+                if (fallbackTower == null || !fallbackTower.IsDestroyed)
+                {
+                    targetTransform = fallbackObj.transform;
+                    targetTower = fallbackTower;
+                }
             }
         }
     }

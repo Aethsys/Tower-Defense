@@ -10,20 +10,22 @@ public class EnemyManagerNetwork : MonoBehaviour
 {
     public static EnemyManagerNetwork Instance { get; private set; }
 
-    [Header("Referencias de Spawn")]
+    [Header("Spawn References")]
     [SerializeField] private Transform[] spawnPoints;
     [SerializeField] private NetworkObject[] enemyPrefabs;
 
-    [Header("Configuración de Oleadas (Waves)")]
+    [Header("Wave Settings")]
     [SerializeField] private bool autoStartWaves = true;
     [SerializeField] private float initialDelay = 3f;
-    [Tooltip("Cantidad total de oleadas. Usa 0 o un valor negativo para oleadas infinitas.")]
+    [Tooltip("Total number of waves. Use 0 or a negative value for infinite waves.")]
     [SerializeField] private int totalWaves = 5;
     [SerializeField] private int baseEnemiesPerWave = 5;
     [SerializeField] private int additionalEnemiesPerWave = 2;
     [SerializeField] private float timeBetweenSpawns = 1.5f;
     [SerializeField] private float timeBetweenWaves = 5f;
     [SerializeField] private bool waitUntilWaveCleared = true;
+
+    private static readonly WaitForSeconds WaitQuarterSecond = new WaitForSeconds(0.25f);
 
     private readonly List<NetworkObject> activeEnemies = new List<NetworkObject>();
     private Coroutine waveRoutine;
@@ -149,6 +151,9 @@ public class EnemyManagerNetwork : MonoBehaviour
             yield return new WaitForSeconds(initialDelay);
         }
 
+        WaitForSeconds spawnWait = timeBetweenSpawns > 0f ? new WaitForSeconds(timeBetweenSpawns) : null;
+        WaitForSeconds waveWait = timeBetweenWaves > 0f ? new WaitForSeconds(timeBetweenWaves) : null;
+
         CurrentWave = 0;
 
         while (totalWaves <= 0 || CurrentWave < totalWaves)
@@ -162,15 +167,15 @@ public class EnemyManagerNetwork : MonoBehaviour
             IsSpawningWave = true;
 
             int enemiesThisWave = Mathf.Max(1, baseEnemiesPerWave + (CurrentWave - 1) * additionalEnemiesPerWave);
-            Debug.Log($"[EnemyManagerNetwork] Iniciando Oleada {CurrentWave} con {enemiesThisWave} enemigos.");
+            Debug.Log($"[EnemyManagerNetwork] Starting Wave {CurrentWave} with {enemiesThisWave} enemies.");
 
             for (int i = 0; i < enemiesThisWave; i++)
             {
                 SpawnEnemy();
 
-                if (i < enemiesThisWave - 1 && timeBetweenSpawns > 0f)
+                if (i < enemiesThisWave - 1 && spawnWait != null)
                 {
-                    yield return new WaitForSeconds(timeBetweenSpawns);
+                    yield return spawnWait;
                 }
             }
 
@@ -180,18 +185,18 @@ public class EnemyManagerNetwork : MonoBehaviour
             {
                 while (ActiveEnemiesCount > 0)
                 {
-                    yield return new WaitForSeconds(0.25f);
+                    yield return WaitQuarterSecond;
                 }
             }
 
             bool hasMoreWaves = totalWaves <= 0 || CurrentWave < totalWaves;
-            if (hasMoreWaves && timeBetweenWaves > 0f)
+            if (hasMoreWaves && waveWait != null)
             {
-                yield return new WaitForSeconds(timeBetweenWaves);
+                yield return waveWait;
             }
         }
 
-        Debug.Log("[EnemyManagerNetwork] Todas las oleadas han finalizado.");
+        Debug.Log("[EnemyManagerNetwork] All waves completed.");
         waveRoutine = null;
     }
 
@@ -199,14 +204,14 @@ public class EnemyManagerNetwork : MonoBehaviour
     {
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer)
         {
-            Debug.LogWarning("[EnemyManagerNetwork] Solo el servidor/host puede spawnear enemigos.");
+            Debug.LogWarning("[EnemyManagerNetwork] Only the Server/Host can spawn enemies.");
             return null;
         }
 
         NetworkObject prefabToSpawn = customPrefab != null ? customPrefab : GetRandomEnemyPrefab();
         if (prefabToSpawn == null)
         {
-            Debug.LogWarning("[EnemyManagerNetwork] No hay prefabs de enemigos asignados en EnemyManagerNetwork.");
+            Debug.LogWarning("[EnemyManagerNetwork] No enemy prefabs assigned in EnemyManagerNetwork.");
             return null;
         }
 
@@ -257,14 +262,35 @@ public class EnemyManagerNetwork : MonoBehaviour
             return null;
         }
 
-        List<NetworkObject> validPrefabs = enemyPrefabs.Where(p => p != null).ToList();
-        if (validPrefabs.Count == 0)
+        int validCount = 0;
+        for (int i = 0; i < enemyPrefabs.Length; i++)
+        {
+            if (enemyPrefabs[i] != null)
+            {
+                validCount++;
+            }
+        }
+
+        if (validCount == 0)
         {
             return null;
         }
 
-        int randomIndex = UnityEngine.Random.Range(0, validPrefabs.Count);
-        return validPrefabs[randomIndex];
+        int targetIndex = UnityEngine.Random.Range(0, validCount);
+        int currentValid = 0;
+        for (int i = 0; i < enemyPrefabs.Length; i++)
+        {
+            if (enemyPrefabs[i] != null)
+            {
+                if (currentValid == targetIndex)
+                {
+                    return enemyPrefabs[i];
+                }
+                currentValid++;
+            }
+        }
+
+        return null;
     }
 
     private Transform GetNextSpawnPoint()
@@ -274,14 +300,17 @@ public class EnemyManagerNetwork : MonoBehaviour
             return null;
         }
 
-        List<Transform> validSpawns = spawnPoints.Where(s => s != null).ToList();
-        if (validSpawns.Count == 0)
+        int count = spawnPoints.Length;
+        for (int attempt = 0; attempt < count; attempt++)
         {
-            return null;
+            int index = (nextSpawnPointIndex + attempt) % count;
+            if (spawnPoints[index] != null)
+            {
+                nextSpawnPointIndex = (index + 1) % count;
+                return spawnPoints[index];
+            }
         }
 
-        Transform selected = validSpawns[nextSpawnPointIndex % validSpawns.Count];
-        nextSpawnPointIndex = (nextSpawnPointIndex + 1) % validSpawns.Count;
-        return selected;
+        return null;
     }
 }

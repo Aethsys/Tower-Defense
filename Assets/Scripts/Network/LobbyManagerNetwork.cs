@@ -11,7 +11,7 @@ using UnityEngine.UI;
 
 public class LobbyManagerNetwork : MonoBehaviour
 {
-    [Header("UI del Lobby")]
+    [Header("Lobby UI")]
     [SerializeField] private TMP_Text codeText;
     [SerializeField] private Button startButton;
     [SerializeField] private string mainMenuSceneName = "Main Menu";
@@ -19,13 +19,21 @@ public class LobbyManagerNetwork : MonoBehaviour
     [SerializeField] private GameObject blackScreenPanel;
     [SerializeField] private float fadeToBlackDuration = 0.2f;
 
-    [Header("Cámara del Lobby")]
+    [Header("Lobby Camera")]
     [SerializeField] private Camera lobbyCamera;
 
-    [Header("Spawns en Plataformas")]
+    [Header("Platform Spawn Points")]
     [SerializeField] private Transform[] spawnPoints;
     [SerializeField] private NetworkObject playerPrefab;
 
+    private static readonly Comparison<NetworkObject> CompareByOwnerClientId =
+        (a, b) => a.OwnerClientId.CompareTo(b.OwnerClientId);
+
+    private readonly List<NetworkObject> playerObjectsBuffer = new List<NetworkObject>(4);
+    private readonly HashSet<ulong> configuredPlayerObjectIds = new HashSet<ulong>();
+
+    private AudioListener lobbyAudioListener;
+    private string lastDisplayedCode;
     private bool isLeaving;
     private bool isStarting;
     private bool isApplicationQuitting;
@@ -49,6 +57,11 @@ public class LobbyManagerNetwork : MonoBehaviour
             {
                 lobbyCamera = Camera.main;
             }
+        }
+
+        if (lobbyCamera != null)
+        {
+            lobbyAudioListener = lobbyCamera.GetComponent<AudioListener>();
         }
 
         if (codeText == null)
@@ -139,8 +152,9 @@ public class LobbyManagerNetwork : MonoBehaviour
             code = MenuManagerNetwork.SessionCode;
         }
 
-        if (!string.IsNullOrEmpty(code) && codeText.text != code)
+        if (!string.IsNullOrEmpty(code) && code != lastDisplayedCode)
         {
+            lastDisplayedCode = code;
             codeText.text = code;
         }
     }
@@ -158,6 +172,8 @@ public class LobbyManagerNetwork : MonoBehaviour
 
     private void OnSceneLoadCompleted(string sceneName, LoadSceneMode loadSceneMode, List<ulong> clientsCompleted, List<ulong> clientsTimedOut)
     {
+        configuredPlayerObjectIds.Clear();
+
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
         {
             EnsureAllConnectedPlayersSpawned();
@@ -183,7 +199,7 @@ public class LobbyManagerNetwork : MonoBehaviour
             return;
         }
 
-        // Si se desconecta el Host (o el propio cliente pierde conexión durante la partida), volver al menú principal
+        // Return to the main menu if the Host disconnects or if the local client loses connection.
         if (NetworkManager.Singleton != null && !NetworkManager.Singleton.IsServer)
         {
             if (clientId == NetworkManager.Singleton.LocalClientId || clientId == NetworkManager.ServerClientId)
@@ -200,9 +216,10 @@ public class LobbyManagerNetwork : MonoBehaviour
     {
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
 
-        foreach (ulong clientId in NetworkManager.Singleton.ConnectedClientsIds)
+        IReadOnlyList<ulong> clientIds = NetworkManager.Singleton.ConnectedClientsIds;
+        for (int i = 0; i < clientIds.Count; i++)
         {
-            EnsurePlayerSpawned(clientId);
+            EnsurePlayerSpawned(clientIds[i]);
         }
     }
 
@@ -215,7 +232,6 @@ public class LobbyManagerNetwork : MonoBehaviour
             return;
         }
 
-        // Si el NetworkManager ya instanció el PlayerPrefab automáticamente, solo lo posicionamos
         if (networkClient.PlayerObject != null)
         {
             return;
@@ -227,7 +243,7 @@ public class LobbyManagerNetwork : MonoBehaviour
 
         if (prefabToSpawn == null)
         {
-            Debug.LogWarning("No se encontró un PlayerPrefab asignado en LobbyManagerNetwork ni en NetworkManager.");
+            Debug.LogWarning("No PlayerPrefab assigned in LobbyManagerNetwork or NetworkManager.");
             return;
         }
 
@@ -246,7 +262,6 @@ public class LobbyManagerNetwork : MonoBehaviour
 
     private void RefreshLobbyPlayersAndCamera()
     {
-        // Asegurar que la cámara del Lobby esté siempre activa
         if (lobbyCamera != null)
         {
             if (!lobbyCamera.gameObject.activeSelf)
@@ -258,10 +273,9 @@ public class LobbyManagerNetwork : MonoBehaviour
                 lobbyCamera.enabled = true;
             }
 
-            AudioListener lobbyListener = lobbyCamera.GetComponent<AudioListener>();
-            if (lobbyListener != null && !lobbyListener.enabled)
+            if (lobbyAudioListener != null && !lobbyAudioListener.enabled)
             {
-                lobbyListener.enabled = true;
+                lobbyAudioListener.enabled = true;
             }
         }
 
@@ -270,44 +284,84 @@ public class LobbyManagerNetwork : MonoBehaviour
             return;
         }
 
-        // Obtener todos los objetos de jugador spawneados ordenados por OwnerClientId
-        List<NetworkObject> playerObjects = NetworkManager.Singleton.SpawnManager.SpawnedObjectsList
-            .Where(obj => obj != null && obj.IsPlayerObject)
-            .OrderBy(obj => obj.OwnerClientId)
-            .ToList();
-
-        for (int i = 0; i < playerObjects.Count; i++)
+        playerObjectsBuffer.Clear();
+        var spawnedList = NetworkManager.Singleton.SpawnManager.SpawnedObjectsList;
+        foreach (NetworkObject obj in spawnedList)
         {
-            NetworkObject playerObj = playerObjects[i];
-
-            // Desactivar cámaras y AudioListeners internos de cada prefab de Player
-            // para que todos los jugadores vean a través de la cámara única del Lobby
-            Camera[] playerCameras = playerObj.GetComponentsInChildren<Camera>(true);
-            foreach (Camera cam in playerCameras)
+            if (obj != null && obj.IsPlayerObject)
             {
-                if (cam != lobbyCamera && cam.enabled)
-                {
-                    cam.enabled = false;
-                }
+                playerObjectsBuffer.Add(obj);
+            }
+        }
+
+        if (playerObjectsBuffer.Count > 1)
+        {
+            playerObjectsBuffer.Sort(CompareByOwnerClientId);
+        }
+
+        for (int i = 0; i < playerObjectsBuffer.Count; i++)
+        {
+            NetworkObject playerObj = playerObjectsBuffer[i];
+
+            if (configuredPlayerObjectIds.Add(playerObj.NetworkObjectId))
+            {
+                DisablePlayerInternalCameraAndListener(playerObj);
             }
 
-            AudioListener[] playerListeners = playerObj.GetComponentsInChildren<AudioListener>(true);
-            foreach (AudioListener listener in playerListeners)
-            {
-                if (lobbyCamera == null || listener.gameObject != lobbyCamera.gameObject)
-                {
-                    if (listener.enabled)
-                    {
-                        listener.enabled = false;
-                    }
-                }
-            }
-
-            // Posicionar al jugador en su spawn correspondiente de las plataformas
             Transform spawn = GetSpawnPoint(i);
             if (spawn != null)
             {
-                playerObj.transform.SetPositionAndRotation(spawn.position, spawn.rotation);
+                if ((playerObj.transform.position - spawn.position).sqrMagnitude > 0.001f ||
+                    Quaternion.Angle(playerObj.transform.rotation, spawn.rotation) > 0.1f)
+                {
+                    CharacterController cc = playerObj.GetComponent<CharacterController>();
+                    if (cc != null)
+                    {
+                        cc.enabled = false;
+                    }
+
+                    playerObj.transform.SetPositionAndRotation(spawn.position, spawn.rotation);
+
+                    if (cc != null)
+                    {
+                        cc.enabled = true;
+                    }
+                }
+            }
+        }
+    }
+
+    private void DisablePlayerInternalCameraAndListener(NetworkObject playerObj)
+    {
+        Camera[] playerCameras = playerObj.GetComponentsInChildren<Camera>(true);
+        for (int i = 0; i < playerCameras.Length; i++)
+        {
+            Camera cam = playerCameras[i];
+            if (cam != lobbyCamera && cam.enabled)
+            {
+                cam.enabled = false;
+            }
+        }
+
+        AudioListener[] playerListeners = playerObj.GetComponentsInChildren<AudioListener>(true);
+        for (int i = 0; i < playerListeners.Length; i++)
+        {
+            AudioListener listener = playerListeners[i];
+            if (lobbyCamera == null || listener.gameObject != lobbyCamera.gameObject)
+            {
+                if (listener.enabled)
+                {
+                    listener.enabled = false;
+                }
+            }
+        }
+
+        Canvas[] playerCanvases = playerObj.GetComponentsInChildren<Canvas>(true);
+        for (int i = 0; i < playerCanvases.Length; i++)
+        {
+            if (playerCanvases[i].enabled)
+            {
+                playerCanvases[i].enabled = false;
             }
         }
     }
@@ -316,12 +370,17 @@ public class LobbyManagerNetwork : MonoBehaviour
     {
         if (NetworkManager.Singleton == null) return 0;
 
-        List<ulong> sortedIds = NetworkManager.Singleton.ConnectedClientsIds
-            .OrderBy(id => id)
-            .ToList();
+        int index = 0;
+        IReadOnlyList<ulong> connectedIds = NetworkManager.Singleton.ConnectedClientsIds;
+        for (int i = 0; i < connectedIds.Count; i++)
+        {
+            if (connectedIds[i] < clientId)
+            {
+                index++;
+            }
+        }
 
-        int index = sortedIds.IndexOf(clientId);
-        return index >= 0 ? index : 0;
+        return index;
     }
 
     private Transform GetSpawnPoint(int index)
@@ -346,7 +405,6 @@ public class LobbyManagerNetwork : MonoBehaviour
 
         try
         {
-            // Poner la pantalla en negro antes de cerrar la sesión/despawnear a los jugadores
             await ShowBlackScreenAsync();
 
             ISession session = MenuManagerNetwork.CurrentSession;
@@ -359,7 +417,7 @@ public class LobbyManagerNetwork : MonoBehaviour
         {
             if (!isApplicationQuitting && Application.isPlaying)
             {
-                Debug.LogWarning($"Aviso al salir de la sesión: {e.Message}");
+                Debug.LogWarning($"Warning while leaving session: {e.Message}");
             }
         }
         finally
@@ -379,6 +437,8 @@ public class LobbyManagerNetwork : MonoBehaviour
         }
     }
 
+    private GameObject runtimeBlackScreenCanvas;
+
     private async Task ShowBlackScreenAsync()
     {
         if (isApplicationQuitting || !Application.isPlaying)
@@ -396,26 +456,37 @@ public class LobbyManagerNetwork : MonoBehaviour
         }
         else
         {
-            // Si no se asignó un panel en el Inspector, creamos un overlay negro de pantalla completa automáticamente
-            GameObject canvasObj = new GameObject("BlackScreenOverlayCanvas");
-            Canvas overlayCanvas = canvasObj.AddComponent<Canvas>();
-            overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            overlayCanvas.sortingOrder = 999;
-            canvasObj.AddComponent<CanvasScaler>();
-            canvasObj.AddComponent<GraphicRaycaster>();
+            if (runtimeBlackScreenCanvas == null)
+            {
+                runtimeBlackScreenCanvas = new GameObject("BlackScreenOverlayCanvas");
+                Canvas overlayCanvas = runtimeBlackScreenCanvas.AddComponent<Canvas>();
+                overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                overlayCanvas.sortingOrder = 999;
+                runtimeBlackScreenCanvas.AddComponent<CanvasScaler>();
+                runtimeBlackScreenCanvas.AddComponent<GraphicRaycaster>();
 
-            GameObject imageObj = new GameObject("BlackScreenImage");
-            imageObj.transform.SetParent(canvasObj.transform, false);
+                GameObject imageObj = new GameObject("BlackScreenImage");
+                imageObj.transform.SetParent(runtimeBlackScreenCanvas.transform, false);
 
-            RectTransform rect = imageObj.AddComponent<RectTransform>();
-            rect.anchorMin = Vector2.zero;
-            rect.anchorMax = Vector2.one;
-            rect.offsetMin = Vector2.zero;
-            rect.offsetMax = Vector2.zero;
+                RectTransform rect = imageObj.AddComponent<RectTransform>();
+                rect.anchorMin = Vector2.zero;
+                rect.anchorMax = Vector2.one;
+                rect.offsetMin = Vector2.zero;
+                rect.offsetMax = Vector2.zero;
 
-            overlayImage = imageObj.AddComponent<Image>();
-            overlayImage.color = new Color(0f, 0f, 0f, fadeToBlackDuration > 0f ? 0f : 1f);
-            overlayImage.raycastTarget = true;
+                overlayImage = imageObj.AddComponent<Image>();
+                overlayImage.raycastTarget = true;
+            }
+            else
+            {
+                runtimeBlackScreenCanvas.SetActive(true);
+                overlayImage = runtimeBlackScreenCanvas.GetComponentInChildren<Image>();
+            }
+
+            if (overlayImage != null)
+            {
+                overlayImage.color = new Color(0f, 0f, 0f, fadeToBlackDuration > 0f ? 0f : 1f);
+            }
         }
 
         if (overlayImage != null && fadeToBlackDuration > 0f)
@@ -438,8 +509,21 @@ public class LobbyManagerNetwork : MonoBehaviour
             overlayImage.color = new Color(baseColor.r, baseColor.g, baseColor.b, 1f);
         }
 
-        // Esperar un frame adicional con la pantalla 100% negra para asegurar que se haya renderizado antes del despawn
+        // Wait one extra frame with a fully opaque black screen before despawning or changing scenes.
         await Task.Yield();
+    }
+
+    private void HideBlackScreen()
+    {
+        if (blackScreenPanel != null)
+        {
+            blackScreenPanel.SetActive(false);
+        }
+
+        if (runtimeBlackScreenCanvas != null)
+        {
+            runtimeBlackScreenCanvas.SetActive(false);
+        }
     }
 
     public async void StartGame()
@@ -451,7 +535,7 @@ public class LobbyManagerNetwork : MonoBehaviour
 
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsHost)
         {
-            Debug.LogWarning("Solo el Host puede iniciar la partida.");
+            Debug.LogWarning("Only the Host can start the match.");
             return;
         }
 
@@ -464,7 +548,13 @@ public class LobbyManagerNetwork : MonoBehaviour
                 startButton.interactable = false;
             }
 
-            // Bloquear la sesión para que no entren más jugadores una vez iniciada la partida
+            await ShowBlackScreenAsync();
+
+            if (isApplicationQuitting || !Application.isPlaying || Application.exitCancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (MenuManagerNetwork.CurrentSession is IHostSession hostSession &&
                 hostSession.State == SessionState.Connected)
             {
@@ -472,18 +562,19 @@ public class LobbyManagerNetwork : MonoBehaviour
                 await hostSession.SavePropertiesAsync();
             }
 
-            // Cargar la escena del mapa para el Host y todos los Clientes conectados
             NetworkManager.Singleton.SceneManager.LoadScene(gameSceneName, LoadSceneMode.Single);
         }
         catch (Exception e)
         {
             isStarting = false;
+            HideBlackScreen();
+
             if (startButton != null)
             {
                 startButton.interactable = true;
             }
 
-            Debug.LogError($"Error al iniciar la partida: {e.Message}");
+            Debug.LogError($"Failed to start the match: {e.Message}");
         }
     }
 }

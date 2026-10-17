@@ -818,8 +818,8 @@ MonoBehaviour:
   autoStartWaves: 1
   initialDelay: 5
   totalWaves: 5
-  baseEnemiesPerWave: 8
-  additionalEnemiesPerWave: 8
+  baseEnemiesPerWave: 2
+  additionalEnemiesPerWave: 2
   timeBetweenSpawns: 1.5
   timeBetweenWaves: 5
   waitUntilWaveCleared: 1
@@ -995,6 +995,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::TowerHealth
   ShowTopMostFoldoutHeaderGroup: 1
   maxHealth: 100
+  coreTower: 1
+  lobbySceneName: Lobby
+  blackScreenPanel: {fileID: 0}
+  fadeToBlackDuration: 0.2
   healthText: {fileID: 1143640972}
   lookAtLocalCamera: 1
   lockVerticalRotation: 1

@@ -7,11 +7,15 @@ using UnityEngine.SceneManagement;
 
 public class PlayerManagerNetwork : MonoBehaviour
 {
-    [Header("Puntos de Spawn en el Mapa")]
+    [Header("Map Spawn Points")]
     [SerializeField] private Transform[] spawnPoints;
     [SerializeField] private NetworkObject playerPrefab;
 
+    private static readonly Comparison<NetworkObject> CompareByOwnerClientId =
+        (a, b) => a.OwnerClientId.CompareTo(b.OwnerClientId);
+
     private readonly HashSet<ulong> positionedClientIds = new HashSet<ulong>();
+    private readonly List<NetworkObject> playerObjectsBuffer = new List<NetworkObject>(4);
 
     private void Awake()
     {
@@ -45,8 +49,6 @@ public class PlayerManagerNetwork : MonoBehaviour
 
     private void Update()
     {
-        // Asegura que cualquier jugador que termine de sincronizar o migrar desde el Lobby
-        // reciba su posición inicial y su cámara correspondiente.
         CoordinatePlayersStartPositions(forceRepositionAll: false);
     }
 
@@ -110,9 +112,10 @@ public class PlayerManagerNetwork : MonoBehaviour
     {
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
 
-        foreach (ulong clientId in NetworkManager.Singleton.ConnectedClientsIds)
+        IReadOnlyList<ulong> clientIds = NetworkManager.Singleton.ConnectedClientsIds;
+        for (int i = 0; i < clientIds.Count; i++)
         {
-            EnsurePlayerSpawned(clientId);
+            EnsurePlayerSpawned(clientIds[i]);
         }
     }
 
@@ -125,7 +128,7 @@ public class PlayerManagerNetwork : MonoBehaviour
             return;
         }
 
-        // Si el jugador ya viene spawneado desde el Lobby (o por NetworkManager), reutilizarlo
+        // Reuse the existing PlayerObject if it migrated from the Lobby scene.
         if (networkClient.PlayerObject != null)
         {
             return;
@@ -137,7 +140,7 @@ public class PlayerManagerNetwork : MonoBehaviour
 
         if (prefabToSpawn == null)
         {
-            Debug.LogWarning("No se encontró un PlayerPrefab asignado en PlayerManagerNetwork ni en NetworkManager.");
+            Debug.LogWarning("No PlayerPrefab assigned in PlayerManagerNetwork or NetworkManager.");
             return;
         }
 
@@ -166,26 +169,57 @@ public class PlayerManagerNetwork : MonoBehaviour
             positionedClientIds.Clear();
         }
 
-        List<NetworkObject> playerObjects = NetworkManager.Singleton.SpawnManager.SpawnedObjectsList
-            .Where(obj => obj != null && obj.IsPlayerObject)
-            .OrderBy(obj => obj.OwnerClientId)
-            .ToList();
-
-        for (int i = 0; i < playerObjects.Count; i++)
+        playerObjectsBuffer.Clear();
+        var spawnedList = NetworkManager.Singleton.SpawnManager.SpawnedObjectsList;
+        foreach (NetworkObject obj in spawnedList)
         {
-            NetworkObject playerObj = playerObjects[i];
+            if (obj != null && obj.IsPlayerObject)
+            {
+                playerObjectsBuffer.Add(obj);
+            }
+        }
+
+        if (playerObjectsBuffer.Count == 0)
+        {
+            return;
+        }
+
+        if (!forceRepositionAll && positionedClientIds.Count >= playerObjectsBuffer.Count)
+        {
+            bool allPositioned = true;
+            for (int i = 0; i < playerObjectsBuffer.Count; i++)
+            {
+                if (!positionedClientIds.Contains(playerObjectsBuffer[i].OwnerClientId))
+                {
+                    allPositioned = false;
+                    break;
+                }
+            }
+
+            if (allPositioned)
+            {
+                return;
+            }
+        }
+
+        if (playerObjectsBuffer.Count > 1)
+        {
+            playerObjectsBuffer.Sort(CompareByOwnerClientId);
+        }
+
+        for (int i = 0; i < playerObjectsBuffer.Count; i++)
+        {
+            NetworkObject playerObj = playerObjectsBuffer[i];
             ulong ownerId = playerObj.OwnerClientId;
 
-            // Configurar la cámara y AudioListener: en la partida solo debe estar activa la del jugador local (IsOwner)
-            ConfigurePlayerCamera(playerObj, playerObj.IsOwner);
-
-            if (!positionedClientIds.Contains(ownerId))
+            if (positionedClientIds.Add(ownerId))
             {
+                ConfigurePlayerCamera(playerObj, playerObj.IsOwner);
+
                 Transform spawn = GetSpawnPoint(i);
                 if (spawn != null)
                 {
                     PlacePlayerAtSpawn(playerObj, spawn);
-                    positionedClientIds.Add(ownerId);
                 }
             }
         }
@@ -210,8 +244,9 @@ public class PlayerManagerNetwork : MonoBehaviour
     private void ConfigurePlayerCamera(NetworkObject playerObj, bool isLocalOwner)
     {
         Camera[] cameras = playerObj.GetComponentsInChildren<Camera>(true);
-        foreach (Camera cam in cameras)
+        for (int i = 0; i < cameras.Length; i++)
         {
+            Camera cam = cameras[i];
             if (cam.enabled != isLocalOwner)
             {
                 cam.enabled = isLocalOwner;
@@ -224,11 +259,22 @@ public class PlayerManagerNetwork : MonoBehaviour
         }
 
         AudioListener[] listeners = playerObj.GetComponentsInChildren<AudioListener>(true);
-        foreach (AudioListener listener in listeners)
+        for (int i = 0; i < listeners.Length; i++)
         {
+            AudioListener listener = listeners[i];
             if (listener.enabled != isLocalOwner)
             {
                 listener.enabled = isLocalOwner;
+            }
+        }
+
+        Canvas[] canvases = playerObj.GetComponentsInChildren<Canvas>(true);
+        for (int i = 0; i < canvases.Length; i++)
+        {
+            Canvas canvas = canvases[i];
+            if (canvas.enabled != isLocalOwner)
+            {
+                canvas.enabled = isLocalOwner;
             }
         }
     }
@@ -237,12 +283,17 @@ public class PlayerManagerNetwork : MonoBehaviour
     {
         if (NetworkManager.Singleton == null) return 0;
 
-        List<ulong> sortedIds = NetworkManager.Singleton.ConnectedClientsIds
-            .OrderBy(id => id)
-            .ToList();
+        int index = 0;
+        IReadOnlyList<ulong> connectedIds = NetworkManager.Singleton.ConnectedClientsIds;
+        for (int i = 0; i < connectedIds.Count; i++)
+        {
+            if (connectedIds[i] < clientId)
+            {
+                index++;
+            }
+        }
 
-        int index = sortedIds.IndexOf(clientId);
-        return index >= 0 ? index : 0;
+        return index;
     }
 
     private Transform GetSpawnPoint(int index)

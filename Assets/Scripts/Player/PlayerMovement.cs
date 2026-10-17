@@ -6,21 +6,21 @@ using UnityEngine.SceneManagement;
 [RequireComponent(typeof(CharacterController))]
 public class PlayerMovement : NetworkBehaviour
 {
-    [Header("Velocidades de Movimiento")]
+    [Header("Movement Speeds")]
     [SerializeField] private float walkSpeed = 5f;
     [SerializeField] private float sprintSpeed = 8.5f;
     [SerializeField] private float crouchSpeed = 2.5f;
 
-    [Header("Salto y Gravedad")]
+    [Header("Jump & Gravity")]
     [SerializeField] private float jumpHeight = 1.5f;
     [SerializeField] private float gravity = -19.62f;
 
-    [Header("Agacharse (Crouch)")]
+    [Header("Crouch Settings")]
     [SerializeField] private float standingHeight = 2f;
     [SerializeField] private float crouchHeight = 1.1f;
     [SerializeField] private float crouchTransitionSpeed = 10f;
 
-    [Header("Cámara y Mouse Look")]
+    [Header("Camera & Mouse Look")]
     [SerializeField] private Transform cameraTransform;
     [SerializeField] private float mouseSensitivity = 0.15f;
     [SerializeField] private float maxLookAngle = 85f;
@@ -34,9 +34,9 @@ public class PlayerMovement : NetworkBehaviour
     private float standingCameraY = 0.5f;
     private float crouchCameraY = 0.05f;
     private bool isCrouching;
+    private bool isGameplayScene;
     private bool hasInitializedGameplayPosition;
 
-    // Sincronización en red para que los demás jugadores vean moverse, rotar y agacharse al jugador
     private readonly NetworkVariable<Vector3> netPosition = new NetworkVariable<Vector3>(
         writePerm: NetworkVariableWritePermission.Owner);
 
@@ -71,12 +71,14 @@ public class PlayerMovement : NetworkBehaviour
         }
 
         inputActions = new InputSystem_Actions();
+        RefreshSceneState(SceneManager.GetActiveScene().name);
     }
 
     private void OnEnable()
     {
         inputActions?.Player.Enable();
         SceneManager.sceneLoaded += OnSceneLoaded;
+        RefreshSceneState(SceneManager.GetActiveScene().name);
     }
 
     private void OnDisable()
@@ -100,12 +102,28 @@ public class PlayerMovement : NetworkBehaviour
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
         hasInitializedGameplayPosition = false;
+        RefreshSceneState(scene.name);
+    }
+
+    private void RefreshSceneState(string sceneName)
+    {
+        isGameplayScene = sceneName != "Main Menu" && sceneName != "Lobby";
+
+        if (!isGameplayScene)
+        {
+            isCrouching = false;
+            transform.localScale = Vector3.one;
+            if (characterController != null)
+            {
+                characterController.height = standingHeight;
+                characterController.center = Vector3.zero;
+            }
+        }
     }
 
     private void Update()
     {
-        // En el Menú Principal o en el Lobby los jugadores están fijos en sus pedestales
-        if (!IsGameplayScene())
+        if (!isGameplayScene)
         {
             if (Cursor.lockState == CursorLockMode.Locked)
             {
@@ -115,7 +133,6 @@ public class PlayerMovement : NetworkBehaviour
             return;
         }
 
-        // Si está en red y este objeto pertenece a otro jugador, interpolamos su posición sincronizada
         if (IsSpawned && !IsOwner)
         {
             ApplyRemoteState();
@@ -143,16 +160,28 @@ public class PlayerMovement : NetworkBehaviour
 
         if (IsSpawned)
         {
-            netPosition.Value = transform.position;
-            netRotation.Value = transform.rotation;
-            netIsCrouching.Value = isCrouching;
+            SyncOwnerNetworkState();
         }
     }
 
-    private bool IsGameplayScene()
+    private void SyncOwnerNetworkState()
     {
-        string sceneName = SceneManager.GetActiveScene().name;
-        return sceneName != "Main Menu" && sceneName != "Lobby";
+        Vector3 currentPos = transform.position;
+        if ((netPosition.Value - currentPos).sqrMagnitude > 0.0001f)
+        {
+            netPosition.Value = currentPos;
+        }
+
+        Quaternion currentRot = transform.rotation;
+        if (Quaternion.Angle(netRotation.Value, currentRot) > 0.05f)
+        {
+            netRotation.Value = currentRot;
+        }
+
+        if (netIsCrouching.Value != isCrouching)
+        {
+            netIsCrouching.Value = isCrouching;
+        }
     }
 
     private void HandleCursorLock()
@@ -181,17 +210,14 @@ public class PlayerMovement : NetworkBehaviour
         float mouseX = lookInput.x * mouseSensitivity;
         float mouseY = lookInput.y * mouseSensitivity;
 
-        // Rotación vertical (Pitch) en la cámara
-        xRotation -= mouseY;
-        xRotation = Mathf.Clamp(xRotation, -maxLookAngle, maxLookAngle);
+        xRotation = Mathf.Clamp(xRotation - mouseY, -maxLookAngle, maxLookAngle);
 
         if (cameraTransform != null)
         {
             cameraTransform.localRotation = Quaternion.Euler(xRotation, initialCameraLocalYaw, 0f);
         }
 
-        // Rotación horizontal (Yaw) en el cuerpo del jugador
-        transform.Rotate(Vector3.up * mouseX);
+        transform.Rotate(0f, mouseX, 0f);
     }
 
     private void HandleCrouch()
@@ -208,20 +234,26 @@ public class PlayerMovement : NetworkBehaviour
         }
 
         float targetHeight = isCrouching ? crouchHeight : standingHeight;
-        float previousHeight = characterController.height;
+        float currentHeight = characterController.height;
 
-        characterController.height = Mathf.Lerp(previousHeight, targetHeight, Time.deltaTime * crouchTransitionSpeed);
+        if (Mathf.Abs(currentHeight - targetHeight) > 0.001f)
+        {
+            float newHeight = Mathf.Lerp(currentHeight, targetHeight, Time.deltaTime * crouchTransitionSpeed);
+            characterController.height = newHeight;
 
-        // Mantener la base de la cápsula a nivel del suelo al cambiar la altura
-        float heightDifference = standingHeight - characterController.height;
-        characterController.center = new Vector3(0f, -heightDifference * 0.5f, 0f);
+            float heightDifference = standingHeight - newHeight;
+            characterController.center = new Vector3(0f, -heightDifference * 0.5f, 0f);
+        }
 
         if (cameraTransform != null)
         {
             float targetCamY = isCrouching ? crouchCameraY : standingCameraY;
             Vector3 camLocalPos = cameraTransform.localPosition;
-            camLocalPos.y = Mathf.Lerp(camLocalPos.y, targetCamY, Time.deltaTime * crouchTransitionSpeed);
-            cameraTransform.localPosition = camLocalPos;
+            if (Mathf.Abs(camLocalPos.y - targetCamY) > 0.001f)
+            {
+                camLocalPos.y = Mathf.Lerp(camLocalPos.y, targetCamY, Time.deltaTime * crouchTransitionSpeed);
+                cameraTransform.localPosition = camLocalPos;
+            }
         }
     }
 
@@ -256,28 +288,25 @@ public class PlayerMovement : NetworkBehaviour
             currentSpeed = sprintSpeed;
         }
 
-        // Mover en relación hacia donde mira la cámara horizontalmente
         Transform referenceTransform = cameraTransform != null ? cameraTransform : transform;
         Vector3 forward = Vector3.ProjectOnPlane(referenceTransform.forward, Vector3.up).normalized;
         Vector3 right = Vector3.ProjectOnPlane(referenceTransform.right, Vector3.up).normalized;
 
-        Vector3 moveDirection = (right * moveInput.x + forward * moveInput.y);
+        Vector3 moveDirection = right * moveInput.x + forward * moveInput.y;
         if (moveDirection.sqrMagnitude > 1f)
         {
             moveDirection.Normalize();
         }
 
-        characterController.Move(moveDirection * (currentSpeed * Time.deltaTime));
-
-        // Salto
         if (inputActions.Player.Jump.WasPressedThisFrame() && isGrounded && !isCrouching)
         {
             verticalVelocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
         }
 
-        // Gravedad
         verticalVelocity.y += gravity * Time.deltaTime;
-        characterController.Move(verticalVelocity * Time.deltaTime);
+
+        Vector3 totalVelocity = moveDirection * currentSpeed + verticalVelocity;
+        characterController.Move(totalVelocity * Time.deltaTime);
     }
 
     private void ApplyRemoteState()
@@ -290,7 +319,10 @@ public class PlayerMovement : NetworkBehaviour
 
         float targetScaleY = netIsCrouching.Value ? (crouchHeight / standingHeight) : 1f;
         Vector3 currentScale = transform.localScale;
-        currentScale.y = Mathf.Lerp(currentScale.y, targetScaleY, Time.deltaTime * crouchTransitionSpeed);
-        transform.localScale = currentScale;
+        if (Mathf.Abs(currentScale.y - targetScaleY) > 0.001f)
+        {
+            currentScale.y = Mathf.Lerp(currentScale.y, targetScaleY, Time.deltaTime * crouchTransitionSpeed);
+            transform.localScale = currentScale;
+        }
     }
 }
