@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -8,6 +9,15 @@ using UnityEngine.SceneManagement;
 public class EnemyManagerNetwork : MonoBehaviour
 {
     public static EnemyManagerNetwork Instance { get; private set; }
+
+    [System.Serializable]
+    private class SpawnRouteAssignment
+    {
+        public Transform spawnPoint;
+        public EnemyPath path;
+    }
+
+    [SerializeField] private SpawnRouteAssignment[] spawnRoutes;
 
     [Header("Spawn References")]
     [SerializeField] private Transform[] spawnPoints;
@@ -200,7 +210,7 @@ public class EnemyManagerNetwork : MonoBehaviour
 
             int enemiesThisWave = Mathf.Max(1, baseEnemiesPerWave + (CurrentWave - 1) * additionalEnemiesPerWave);
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            Debug.Log($"[EnemyManagerNetwork] Starting Wave {CurrentWave} with {enemiesThisWave} enemies.");
+            UnityEngine.Debug.Log($"[EnemyManagerNetwork] Starting Wave {CurrentWave} with {enemiesThisWave} enemies.");
 #endif
 
             for (int i = 0; i < enemiesThisWave; i++)
@@ -231,7 +241,7 @@ public class EnemyManagerNetwork : MonoBehaviour
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-        Debug.Log("[EnemyManagerNetwork] All waves completed.");
+        UnityEngine.Debug.Log("[EnemyManagerNetwork] All waves completed.");
 #endif
         waveRoutine = null;
     }
@@ -246,7 +256,7 @@ public class EnemyManagerNetwork : MonoBehaviour
         NetworkObject prefabToSpawn = customPrefab != null ? customPrefab : GetRandomEnemyPrefab();
         if (prefabToSpawn == null)
         {
-            Debug.LogWarning("[EnemyManagerNetwork] No enemy prefabs assigned in EnemyManagerNetwork.");
+            UnityEngine.Debug.LogWarning("[EnemyManagerNetwork] No enemy prefabs assigned in EnemyManagerNetwork.");
             return null;
         }
 
@@ -254,11 +264,54 @@ public class EnemyManagerNetwork : MonoBehaviour
         Vector3 position = spawn != null ? spawn.position : transform.position;
         Quaternion rotation = spawn != null ? spawn.rotation : Quaternion.identity;
 
-        NetworkObject enemyInstance = Instantiate(prefabToSpawn, position, rotation);
+        /* NetworkObject enemyInstance = Instantiate(prefabToSpawn, position, rotation);
+         enemyInstance.Spawn(true);*/
+
+        NetworkObject enemyInstance = Instantiate(
+        prefabToSpawn,
+        position,
+        rotation
+);
+
+        EnemyMovement movement = enemyInstance.GetComponent<EnemyMovement>();
+
+        if (movement != null)
+        {
+            EnemyPath path = GetPathForSpawn(spawn);
+
+            if (path != null)
+            {
+                movement.SetPath(path);
+            }
+        }
+
         enemyInstance.Spawn(true);
 
         activeEnemies.Add(enemyInstance);
         return enemyInstance;
+    }
+
+    private EnemyPath GetPathForSpawn(Transform spawnPoint)
+    {
+        if (spawnPoint == null || spawnRoutes == null)
+            return null;
+
+        for (int i = 0; i < spawnRoutes.Length; i++)
+        {
+            SpawnRouteAssignment assignment = spawnRoutes[i];
+
+            if (assignment == null)
+                continue;
+
+            if (assignment.spawnPoint == spawnPoint)
+                return assignment.path;
+        }
+
+        UnityEngine.Debug.LogWarning(
+            $"No EnemyPath assigned to spawn point: {spawnPoint.name}"
+        );
+
+        return null;
     }
 
     public void DespawnEnemy(NetworkObject enemy, bool destroy = true)

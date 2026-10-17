@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
@@ -5,6 +6,15 @@ using UnityEngine;
 [RequireComponent(typeof(NetworkObject))]
 public class EnemyMovement : NetworkBehaviour
 {
+
+    public void SetPath(EnemyPath path)
+    {
+        enemyPath = path;
+        currentWaypointIndex = 0;
+        hasReachedPathEnd = false;
+        isInAttackRange = false;
+    }
+
     [Header("Movement Settings")]
     [SerializeField] private float moveSpeed = 3.5f;
     [SerializeField] private float rotationSpeed = 10f;
@@ -36,6 +46,13 @@ public class EnemyMovement : NetworkBehaviour
     private float attackTimer;
     private float targetSearchTimer;
     private bool isInAttackRange;
+
+    [Header("Enemy Route")]
+    [SerializeField] private EnemyPath enemyPath;
+    [SerializeField] private float waypointReachDistance = 0.15f;
+
+    private int currentWaypointIndex;
+    private bool hasReachedPathEnd;
 
     private void Awake()
     {
@@ -109,7 +126,7 @@ public class EnemyMovement : NetworkBehaviour
         }
     }
 
-    private void ServerUpdateMovementAndAttack()
+    /*private void ServerUpdateMovementAndAttack()
     {
         if (targetTransform == null || (targetTower != null && targetTower.IsDestroyed))
         {
@@ -164,12 +181,173 @@ public class EnemyMovement : NetworkBehaviour
             {
                 AttackTower();
                 float variation = attackIntervalRandomVariation > 0f
-                    ? Random.Range(-attackIntervalRandomVariation, attackIntervalRandomVariation)
+                    ? UnityEngine.Random.Range(-attackIntervalRandomVariation, attackIntervalRandomVariation)
                     : 0f;
                 attackTimer = Mathf.Max(0.1f, attackInterval + variation);
             }
         }
+    }*/
+
+
+    private void ServerUpdateMovementAndAttack()
+    {
+        if (!hasReachedPathEnd && enemyPath != null)
+        {
+            FollowPath();
+            return;
+        }
+
+        if (targetTransform == null ||
+            (targetTower != null && targetTower.IsDestroyed))
+        {
+            targetSearchTimer -= Time.deltaTime;
+
+            if (targetSearchTimer > 0f)
+                return;
+
+            targetSearchTimer = 0.5f;
+            FindTargetTower();
+
+            if (targetTransform == null)
+                return;
+        }
+
+        float dt = Time.deltaTime;
+        Vector3 currentPos = selfTransform.position;
+        Vector3 targetWorldPos = targetTransform.position;
+
+        Vector3 targetPos = new Vector3(
+            targetWorldPos.x,
+            currentPos.y,
+            targetWorldPos.z
+        );
+
+        Vector3 toTarget = targetPos - currentPos;
+        float sqrDistance = toTarget.sqrMagnitude;
+        float sqrAttackRange = attackRange * attackRange;
+
+        Quaternion nextRotation = selfTransform.rotation;
+
+        if (sqrDistance > 0.0001f)
+        {
+            Quaternion desiredRotation =
+                Quaternion.LookRotation(toTarget, Vector3.up);
+
+            nextRotation = Quaternion.Slerp(
+                nextRotation,
+                desiredRotation,
+                rotationSpeed * dt
+            );
+        }
+
+        if (sqrDistance > sqrAttackRange)
+        {
+            isInAttackRange = false;
+            attackTimer = firstAttackDelay;
+
+            Vector3 nextPos = Vector3.MoveTowards(
+                currentPos,
+                targetPos,
+                moveSpeed * dt
+            );
+
+            selfTransform.SetPositionAndRotation(nextPos, nextRotation);
+        }
+        else
+        {
+            selfTransform.rotation = nextRotation;
+
+            if (!isInAttackRange)
+            {
+                isInAttackRange = true;
+                attackTimer = firstAttackDelay;
+            }
+
+            attackTimer -= dt;
+
+            if (attackTimer <= 0f)
+            {
+                AttackTower();
+
+                float variation = attackIntervalRandomVariation > 0f
+                    ? UnityEngine.Random.Range(
+                        -attackIntervalRandomVariation,
+                        attackIntervalRandomVariation
+                    )
+                    : 0f;
+
+                attackTimer = Mathf.Max(
+                    0.1f,
+                    attackInterval + variation
+                );
+            }
+        }
     }
+
+    private void FollowPath()
+    {
+        if (enemyPath == null || enemyPath.WaypointCount == 0)
+        {
+            hasReachedPathEnd = true;
+            return;
+        }
+
+        Transform waypoint = enemyPath.GetWaypoint(currentWaypointIndex);
+
+        if (waypoint == null)
+        {
+            currentWaypointIndex++;
+
+            if (currentWaypointIndex >= enemyPath.WaypointCount)
+                hasReachedPathEnd = true;
+
+            return;
+        }
+
+        Vector3 currentPos = selfTransform.position;
+        Vector3 targetPos = new Vector3(
+            waypoint.position.x,
+            currentPos.y,
+            waypoint.position.z
+        );
+
+        Vector3 direction = targetPos - currentPos;
+
+        Quaternion nextRotation = selfTransform.rotation;
+
+        if (direction.sqrMagnitude > 0.0001f)
+        {
+            Quaternion desiredRotation =
+                Quaternion.LookRotation(direction, Vector3.up);
+
+            nextRotation = Quaternion.Slerp(
+                selfTransform.rotation,
+                desiredRotation,
+                rotationSpeed * Time.deltaTime
+            );
+        }
+
+        selfTransform.rotation = nextRotation;
+
+        if (direction.magnitude <= waypointReachDistance)
+        {
+            currentWaypointIndex++;
+
+            if (currentWaypointIndex >= enemyPath.WaypointCount)
+                hasReachedPathEnd = true;
+
+            return;
+        }
+
+        Vector3 nextPosition = Vector3.MoveTowards(
+            currentPos,
+            targetPos,
+            moveSpeed * Time.deltaTime
+        );
+
+        selfTransform.position = nextPosition;
+    }
+
 
     private void AttackTower()
     {
@@ -184,7 +362,7 @@ public class EnemyMovement : NetworkBehaviour
         }
     }
 
-    private void FindTargetTower()
+    /*private void FindTargetTower()
     {
         TowerHealth closestTower = null;
         float closestSqrDistance = float.MaxValue;
@@ -250,7 +428,36 @@ public class EnemyMovement : NetworkBehaviour
                 }
             }
         }
+    }*/
+
+
+    private void FindTargetTower()
+    {
+        TowerHealth mainTower = null;
+
+        List<TowerHealth> activeTowers = TowerHealth.ActiveTowers;
+
+        for (int i = 0; i < activeTowers.Count; i++)
+        {
+            TowerHealth tower = activeTowers[i];
+
+            if (tower == null ||
+                tower.IsDestroyed ||
+                !tower.IsCoreTower)
+            {
+                continue;
+            }
+
+            mainTower = tower;
+            break;
+        }
+
+        targetTower = mainTower;
+        targetTransform = mainTower != null
+            ? mainTower.transform
+            : null;
     }
+
 
     private void SyncClientTransform()
     {
