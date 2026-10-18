@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -46,6 +47,8 @@ public class EnemyMovement : NetworkBehaviour
     private float attackTimer;
     private float targetSearchTimer;
     private bool isInAttackRange;
+    private BaitTower targetBait;
+    private Watchtower targetWatchtower;
 
     [Header("Enemy Route")]
     [SerializeField] private EnemyPath enemyPath;
@@ -87,14 +90,14 @@ public class EnemyMovement : NetworkBehaviour
         }
     }
 
+
     private void Update()
     {
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+        if (NetworkManager.Singleton != null &&
+            NetworkManager.Singleton.IsListening)
         {
             if (!IsSpawned)
-            {
                 return;
-            }
 
             if (!IsServer)
             {
@@ -110,6 +113,283 @@ public class EnemyMovement : NetworkBehaviour
             SyncServerNetworkState();
         }
     }
+
+
+    private void ServerUpdateMovementAndAttack()
+    {
+        // Liberar la torre casa si deja de estar activa.
+        if (targetBait != null && !targetBait.IsActive)
+        {
+            targetBait = null;
+            targetTower = null;
+            targetTransform = null;
+            isInAttackRange = false;
+            attackTimer = firstAttackDelay;
+            targetSearchTimer = 0f;
+        }
+
+        // Liberar la torre de vigilancia si es destruida.
+        if (targetWatchtower != null && !targetWatchtower.IsActive)
+        {
+            targetWatchtower = null;
+            targetTower = null;
+            targetTransform = null;
+            isInAttackRange = false;
+            attackTimer = firstAttackDelay;
+            targetSearchTimer = 0f;
+        }
+
+        // Buscar primero la torre casa.
+        if (targetBait == null && targetWatchtower == null)
+        {
+            targetBait = FindAvailableBait();
+
+            // Si no hay torre casa activa, buscar una de vigilancia.
+            if (targetBait == null)
+                targetWatchtower = FindAvailableWatchtower();
+        }
+
+        // Perseguir la torre casa.
+        if (targetBait != null)
+        {
+            targetTower = targetBait.Health;
+            targetTransform = targetBait.transform;
+
+            if (targetTower == null || targetTower.IsDestroyed)
+            {
+                targetBait = null;
+                targetTower = null;
+                targetTransform = null;
+                isInAttackRange = false;
+                return;
+            }
+
+            MoveTowardsCurrentTarget();
+            return;
+        }
+
+        // Perseguir la torre de vigilancia.
+        if (targetWatchtower != null)
+        {
+            targetTower = targetWatchtower.Health;
+            targetTransform = targetWatchtower.transform;
+
+            if (targetTower == null || targetTower.IsDestroyed)
+            {
+                targetWatchtower = null;
+                targetTower = null;
+                targetTransform = null;
+                isInAttackRange = false;
+                return;
+            }
+
+            MoveTowardsCurrentTarget();
+            return;
+        }
+
+        // Si no hay señuelos, continuar la ruta original.
+        if (!hasReachedPathEnd && enemyPath != null)
+        {
+            targetTower = null;
+            targetTransform = null;
+            isInAttackRange = false;
+            attackTimer = firstAttackDelay;
+
+            FollowPath();
+            return;
+        }
+
+        // Buscar la torre principal al terminar la ruta.
+        if (targetTransform == null ||
+            targetTower == null ||
+            targetTower.IsDestroyed)
+        {
+            targetSearchTimer -= Time.deltaTime;
+
+            if (targetSearchTimer > 0f)
+                return;
+
+            targetSearchTimer = 0.5f;
+            FindTargetTower();
+
+            if (targetTransform == null || targetTower == null)
+                return;
+        }
+
+        MoveTowardsCurrentTarget();
+    }
+
+
+
+    private BaitTower FindAvailableBait()
+    {
+        BaitTower closestBait = null;
+        float closestSqrDistance = float.MaxValue;
+
+        List<BaitTower> baits = BaitTower.ActiveBaits;
+
+        for (int i = 0; i < baits.Count; i++)
+        {
+            BaitTower bait = baits[i];
+
+            if (bait == null ||
+                !bait.CanAttract(transform.position))
+            {
+                continue;
+            }
+
+            Vector3 offset =
+                bait.transform.position - transform.position;
+
+            offset.y = 0f;
+
+            float sqrDistance = offset.sqrMagnitude;
+
+            if (sqrDistance < closestSqrDistance)
+            {
+                closestSqrDistance = sqrDistance;
+                closestBait = bait;
+            }
+        }
+
+        UnityEngine.Debug.Log(
+            $"[EnemyMovement] Enemigo={name}, " +
+            $"Señuelo encontrado=" +
+            $"{(closestBait != null ? closestBait.name : "ninguno")}",
+            this);
+
+        return closestBait;
+    }
+
+
+    private Watchtower FindAvailableWatchtower()
+    {
+        Watchtower closestWatchtower = null;
+        float closestSqrDistance = float.MaxValue;
+
+        List<Watchtower> watchtowers = Watchtower.ActiveWatchtowers;
+
+        for (int i = 0; i < watchtowers.Count; i++)
+        {
+            Watchtower watchtower = watchtowers[i];
+
+            if (watchtower == null ||
+                !watchtower.CanAttract(transform.position))
+            {
+                continue;
+            }
+
+            Vector3 offset =
+                watchtower.transform.position - transform.position;
+
+            offset.y = 0f;
+
+            float sqrDistance = offset.sqrMagnitude;
+
+            if (sqrDistance < closestSqrDistance)
+            {
+                closestSqrDistance = sqrDistance;
+                closestWatchtower = watchtower;
+            }
+        }
+
+        UnityEngine.Debug.Log(
+            $"[EnemyMovement] Enemigo={name}, " +
+            $"Torre de vigilancia encontrada=" +
+            $"{(closestWatchtower != null ? closestWatchtower.name : "ninguna")}",
+            this);
+
+        return closestWatchtower;
+    }
+
+
+    private void MoveTowardsCurrentTarget()
+    {
+        if (targetTransform == null ||
+            targetTower == null ||
+            targetTower.IsDestroyed)
+        {
+            isInAttackRange = false;
+            return;
+        }
+
+        float dt = Time.deltaTime;
+
+        Vector3 currentPos = selfTransform.position;
+        Vector3 targetWorldPos = targetTransform.position;
+
+        Vector3 targetPos = new Vector3(
+            targetWorldPos.x,
+            currentPos.y,
+            targetWorldPos.z
+        );
+
+        Vector3 toTarget = targetPos - currentPos;
+
+        float sqrDistance = toTarget.sqrMagnitude;
+        float sqrAttackRange = attackRange * attackRange;
+
+        Quaternion nextRotation = selfTransform.rotation;
+
+        if (sqrDistance > 0.0001f)
+        {
+            Quaternion desiredRotation =
+                Quaternion.LookRotation(toTarget, Vector3.up);
+
+            nextRotation = Quaternion.Slerp(
+                selfTransform.rotation,
+                desiredRotation,
+                rotationSpeed * dt
+            );
+        }
+
+        if (sqrDistance > sqrAttackRange)
+        {
+            isInAttackRange = false;
+            attackTimer = firstAttackDelay;
+
+            Vector3 nextPosition = Vector3.MoveTowards(
+                currentPos,
+                targetPos,
+                moveSpeed * dt
+            );
+
+            selfTransform.SetPositionAndRotation(
+                nextPosition,
+                nextRotation
+            );
+        }
+        else
+        {
+            selfTransform.rotation = nextRotation;
+
+            if (!isInAttackRange)
+            {
+                isInAttackRange = true;
+                attackTimer = firstAttackDelay;
+            }
+
+            attackTimer -= dt;
+
+            if (attackTimer <= 0f)
+            {
+                AttackTower();
+
+                float variation =
+                    attackIntervalRandomVariation > 0f
+                    ? UnityEngine.Random.Range(
+                        -attackIntervalRandomVariation,
+                        attackIntervalRandomVariation)
+                    : 0f;
+
+                attackTimer = Mathf.Max(
+                    0.1f,
+                    attackInterval + variation
+                );
+            }
+        }
+    }
+
 
     private void SyncServerNetworkState()
     {
@@ -189,7 +469,7 @@ public class EnemyMovement : NetworkBehaviour
     }*/
 
 
-    private void ServerUpdateMovementAndAttack()
+    /*private void ServerUpdateMovementAndAttack()
     {
         if (!hasReachedPathEnd && enemyPath != null)
         {
@@ -282,7 +562,7 @@ public class EnemyMovement : NetworkBehaviour
                 );
             }
         }
-    }
+    }*/
 
     private void FollowPath()
     {

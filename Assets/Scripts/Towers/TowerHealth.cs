@@ -51,6 +51,27 @@ public class TowerHealth : NetworkBehaviour
     public event Action<int, int> OnHealthChanged;
     public event Action<TowerHealth> OnTowerDestroyed;
 
+
+    public bool RestoreHealth()
+    {
+        if (IsSpawned && !IsServer)
+            return false;
+
+        if (coreTower || !IsDestroyed)
+            return false;
+
+        if (IsSpawned)
+        {
+            currentHealth.Value = maxHealth;
+        }
+
+        UpdateHealthUI(maxHealth);
+        OnHealthChanged?.Invoke(maxHealth, maxHealth);
+
+        return true;
+    }
+
+
     private void OnApplicationQuit()
     {
         isApplicationQuitting = true;
