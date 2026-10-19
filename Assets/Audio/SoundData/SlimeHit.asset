@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f7df14262ca151b4397b291195658aac, type: 3}
+  m_Name: SlimeHit
+  m_EditorClassIdentifier: Assembly-CSharp::SoundData
+  clips:
+  - {fileID: 8300000, guid: 38e6aee1234fb6e48983f44426ae1574, type: 3}
+  - {fileID: 8300000, guid: f4c88d6ea05a85e49bb7b0b05852fbc7, type: 3}
+  - {fileID: 8300000, guid: 9d482aff76359d945affefa4314332ba, type: 3}
+  - {fileID: 8300000, guid: 650af8245d0d26c4da38ca6fc7de9cd6, type: 3}
+  - {fileID: 8300000, guid: 96fb59231d1b1f94db0792732efe0e16, type: 3}
+  volume: 0.8
+  pitchRange: {x: 0.9, y: 1.1}
