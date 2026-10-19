@@ -8,6 +8,8 @@ public class WeaponManager : MonoBehaviour
     [SerializeField] private WeaponBase currentEquippedWeapon;
     [SerializeField] private Transform aimOrigin;
 
+    private Transform ownerRoot;
+
     public WeaponBase ActiveWeapon => currentEquippedWeapon != null ? currentEquippedWeapon : defaultUnarmedWeapon;
     public WeaponBase EquippedWeapon => currentEquippedWeapon;
     public WeaponBase UnarmedWeapon => defaultUnarmedWeapon;
@@ -20,8 +22,10 @@ public class WeaponManager : MonoBehaviour
         useGUILayout = false;
     }
 
-    public void Initialize(Transform ownerRoot, Transform cameraOrAimOrigin)
+    public void Initialize(Transform owner, Transform cameraOrAimOrigin)
     {
+        ownerRoot = owner != null ? owner : transform;
+
         if (cameraOrAimOrigin != null)
         {
             aimOrigin = cameraOrAimOrigin;
@@ -65,7 +69,7 @@ public class WeaponManager : MonoBehaviour
 
         if (currentEquippedWeapon != null)
         {
-            currentEquippedWeapon.Initialize(transform, aimOrigin);
+            currentEquippedWeapon.Initialize(ownerRoot != null ? ownerRoot : transform, aimOrigin);
             currentEquippedWeapon.OnEquip();
         }
         else if (defaultUnarmedWeapon != null)

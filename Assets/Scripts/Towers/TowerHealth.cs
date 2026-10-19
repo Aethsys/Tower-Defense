@@ -51,7 +51,6 @@ public class TowerHealth : NetworkBehaviour
     public event Action<int, int> OnHealthChanged;
     public event Action<TowerHealth> OnTowerDestroyed;
 
-
     public bool RestoreHealth()
     {
         if (IsSpawned && !IsServer)
@@ -70,7 +69,6 @@ public class TowerHealth : NetworkBehaviour
 
         return true;
     }
-
 
     private void OnApplicationQuit()
     {

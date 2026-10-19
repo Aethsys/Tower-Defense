@@ -22,22 +22,25 @@ public class AreaDamageTower : NetworkBehaviour
     [SerializeField] private NetworkObject projectilePrefab;
 
     private float attackTimer;
-
+    private TowerHealth towerHealth;
     private readonly Collider[] detectedColliders = new Collider[64];
-    private readonly HashSet<EnemyHealth> uniqueEnemies =
-        new HashSet<EnemyHealth>();
+
+    private void Awake()
+    {
+        useGUILayout = false;
+        towerHealth = GetComponent<TowerHealth>();
+    }
 
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
 
-        attackTimer = attackInterval;
-
-        if (IsServer)
+        if (towerHealth == null)
         {
-            UnityEngine.Debug.Log(
-                $"[AreaDamageTower] {name} activa en el servidor.", this);
+            towerHealth = GetComponent<TowerHealth>();
         }
+
+        attackTimer = attackInterval;
     }
 
     private void Update()
@@ -45,9 +48,7 @@ public class AreaDamageTower : NetworkBehaviour
         if (!IsServer || !IsSpawned)
             return;
 
-        TowerHealth health = GetComponent<TowerHealth>();
-
-        if (health == null || health.IsDestroyed)
+        if (towerHealth == null || towerHealth.IsDestroyed)
             return;
 
         attackTimer -= Time.deltaTime;
@@ -64,17 +65,6 @@ public class AreaDamageTower : NetworkBehaviour
 
         if (projectilePrefab == null)
         {
-            UnityEngine.Debug.LogWarning(
-                $"[AreaDamageTower] {name}: falta asignar Projectile Prefab.",
-                this);
-            return;
-        }
-
-        if (firePoint == null)
-        {
-            UnityEngine.Debug.LogWarning(
-                $"[AreaDamageTower] {name}: falta asignar Fire Point.",
-                this);
             return;
         }
 
@@ -123,10 +113,13 @@ public class AreaDamageTower : NetworkBehaviour
         if (target == null || !target.IsSpawned)
             return;
 
+        Vector3 spawnPos = firePoint != null ? firePoint.position : transform.position + Vector3.up * 1.5f;
+        Quaternion spawnRot = firePoint != null ? firePoint.rotation : transform.rotation;
+
         NetworkObject projectileObject = Instantiate(
             projectilePrefab,
-            firePoint.position,
-            firePoint.rotation);
+            spawnPos,
+            spawnRot);
 
         AreaDamageProjectile projectile =
             projectileObject.GetComponent<AreaDamageProjectile>();
@@ -148,9 +141,6 @@ public class AreaDamageTower : NetworkBehaviour
             areaDamage,
             explosionRadius,
             projectileSpeed);
-
-        UnityEngine.Debug.Log(
-            $"[AreaDamageTower] {name} dispara contra {target.name}.", this);
     }
 
     private void OnDrawGizmosSelected()

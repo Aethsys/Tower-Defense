@@ -47,7 +47,12 @@ public class BaitTower : NetworkBehaviour
 
     private void Awake()
     {
+        useGUILayout = false;
         towerHealth = GetComponent<TowerHealth>();
+        if (towerLight == null)
+        {
+            towerLight = GetComponentInChildren<Light>(true);
+        }
     }
 
     private void OnEnable()
@@ -78,7 +83,7 @@ public class BaitTower : NetworkBehaviour
             return;
         }
 
-        // 2. Suscribirse al evento de destrucción.
+        // 2. Suscribirse al evento de destrucciÃ³n.
         towerHealth.OnTowerDestroyed -= HandleTowerDestroyed;
         towerHealth.OnTowerDestroyed += HandleTowerDestroyed;
 
@@ -87,7 +92,7 @@ public class BaitTower : NetworkBehaviour
 
         UpdateLightState(!towerHealth.IsDestroyed);
 
-        // 3. Solo el servidor controla el estado del señuelo.
+        // 3. Solo el servidor controla el estado del seÃ±uelo.
         if (!IsServer)
         {
             return;
@@ -97,7 +102,7 @@ public class BaitTower : NetworkBehaviour
         baitActive.Value = false;
         nextActivationTime = 0f;
 
-        // 5. Validar la configuración.
+        // 5. Validar la configuraciÃ³n.
         if (activeDuration <= 0f)
         {
             UnityEngine.Debug.LogError(
@@ -112,13 +117,13 @@ public class BaitTower : NetworkBehaviour
         if (attractionRadius <= 0f)
         {
             UnityEngine.Debug.LogWarning(
-                $"[BaitTower] ADVERTENCIA: Attraction Radius no es válido. " +
+                $"[BaitTower] ADVERTENCIA: Attraction Radius no es vÃ¡lido. " +
                 $"Valor actual={attractionRadius}",
                 this
             );
         }
 
-        // 6. Activación automática para pruebas.
+        // 6. ActivaciÃ³n automÃ¡tica para pruebas.
         if (activateOnStart)
         {
             bool activated = TryActivate();
@@ -126,7 +131,7 @@ public class BaitTower : NetworkBehaviour
             if (activated)
             {
                 UnityEngine.Debug.Log(
-                    $"[BaitTower] ÉXITO: {name} activó el señuelo."
+                    $"[BaitTower] Ã‰XITO: {name} activÃ³ el seÃ±uelo."
                 );
             }
             else
@@ -142,8 +147,8 @@ public class BaitTower : NetworkBehaviour
         else
         {
             UnityEngine.Debug.Log(
-                $"[BaitTower] {name} está inicializada, " +
-                "pero Activate On Start está desactivado."
+                $"[BaitTower] {name} estÃ¡ inicializada, " +
+                "pero Activate On Start estÃ¡ desactivado."
             );
         }
     }
@@ -173,7 +178,7 @@ public class BaitTower : NetworkBehaviour
 
     public bool TryActivate()
     {
-        // Solo el servidor controla la activación.
+        // Solo el servidor controla la activaciÃ³n.
         if (IsSpawned && !IsServer)
             return false;
 
@@ -212,7 +217,7 @@ public class BaitTower : NetworkBehaviour
         if (tower != towerHealth)
             return;
 
-        // La luz se actualiza también en los clientes.
+        // La luz se actualiza tambiÃ©n en los clientes.
         UpdateLightState(false);
 
         UnityEngine.Debug.Log(
@@ -220,7 +225,7 @@ public class BaitTower : NetworkBehaviour
             "Reduciendo intensidad de la luz."
         );
 
-        // Solo el servidor controla el estado del señuelo.
+        // Solo el servidor controla el estado del seÃ±uelo.
         if (IsServer)
         {
             EndActivation();
@@ -286,8 +291,8 @@ public class BaitTower : NetworkBehaviour
 
 
     /// <summary>
-    /// Reconstruye la torre y restaura su vida y su iluminación.
-    /// Esta función queda preparada para el futuro sistema de construcción.
+    /// Reconstruye la torre y restaura su vida y su iluminaciÃ³n.
+    /// Esta funciÃ³n queda preparada para el futuro sistema de construcciÃ³n.
     /// </summary>
     public bool RebuildTower()
     {
@@ -316,7 +321,7 @@ public class BaitTower : NetworkBehaviour
         bool result = RebuildTower();
 
         UnityEngine.Debug.Log(
-            $"[BaitTower] Prueba de reconstrucción: {result}",
+            $"[BaitTower] Prueba de reconstrucciÃ³n: {result}",
             this
         );
     }

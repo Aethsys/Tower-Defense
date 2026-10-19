@@ -1,4 +1,3 @@
-
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
@@ -78,6 +77,7 @@ public class AreaDamageProjectile : NetworkBehaviour
             QueryTriggerInteraction.Collide);
 
         damagedEnemies.Clear();
+        Vector3 explosionCenter = transform.position;
 
         for (int i = 0; i < count; i++)
         {
@@ -92,11 +92,26 @@ public class AreaDamageProjectile : NetworkBehaviour
                 continue;
             }
 
-            enemy.TakeDamage(damage);
+            // Empuje radial estrictamente en el plano horizontal (XZ).
+            // Evita componentes hacia abajo que empujen al enemigo contra el suelo.
+            Vector3 diff = enemy.transform.position - explosionCenter;
+            diff.y = 0f;
+            Vector3 knockDir = diff.sqrMagnitude > 0.0001f ? diff.normalized : Vector3.forward;
+            enemy.TakeDamage(damage, knockDir, 3.5f, 0.2f);
         }
 
-        UnityEngine.Debug.Log(
-            $"[AreaDamageProjectile] Explosión: {damagedEnemies.Count} enemigos afectados.");
+        // Ocultar proyectil y desactivar colisiones inmediatamente al detonar
+        Renderer[] renderers = GetComponentsInChildren<Renderer>();
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] != null) renderers[i].enabled = false;
+        }
+
+        Collider[] cols = GetComponentsInChildren<Collider>();
+        for (int i = 0; i < cols.Length; i++)
+        {
+            if (cols[i] != null) cols[i].enabled = false;
+        }
 
         StartCoroutine(DespawnAfterDelay());
     }
@@ -105,7 +120,7 @@ public class AreaDamageProjectile : NetworkBehaviour
     {
         yield return new WaitForSeconds(explosionLifetime);
 
-        if (IsServer && NetworkObject.IsSpawned)
+        if (IsServer && NetworkObject != null && NetworkObject.IsSpawned)
             NetworkObject.Despawn(true);
     }
 

@@ -28,7 +28,12 @@ public class Watchtower : NetworkBehaviour
 
     private void Awake()
     {
+        useGUILayout = false;
         towerHealth = GetComponent<TowerHealth>();
+        if (towerLight == null)
+        {
+            towerLight = GetComponentInChildren<Light>(true);
+        }
     }
 
     private void OnEnable()
