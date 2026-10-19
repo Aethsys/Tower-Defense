@@ -229,6 +229,7 @@ GameObject:
   - component: {fileID: -334703406840466679}
   - component: {fileID: 245877465374703774}
   - component: {fileID: 4078565523512805137}
+  - component: {fileID: 7400000000000000001}
   m_Layer: 3
   m_Name: Player
   m_TagString: Player
@@ -653,3 +654,34 @@ Animator:
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
   m_WriteDefaultValuesOnDisable: 0
+--- !u!114 &7400000000000000001
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4514735115878929704}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2f6b9d41a8c34e7d95b0e3a1c7d58f46, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TowerBuilder
+  options:
+  - displayName: Torre area
+    prefab: {fileID: 5068804009431540653, guid: 787a454959fbe1b4b9446e915a3bfe73, type: 3}
+  - displayName: Torre cebo
+    prefab: {fileID: 6130202820288309929, guid: 07623d06b25796d479340a476b52f44c, type: 3}
+  - displayName: Atalaya
+    prefab: {fileID: 3291058244431604233, guid: 8e8b46f4fd61692479c5f41811a656bb, type: 3}
+  cameraTransform: {fileID: 5806711191497860550}
+  playerCombat: {fileID: 245877465374703774}
+  groundLayers:
+    serializedVersion: 2
+    m_Bits: 1
+  maxPlaceDistance: 8
+  minGroundNormalY: 0.7
+  clearRadius: 1.2
+  placeCooldown: 1.5
+  maxTowersPerType: 5
+  validColor: {r: 0.2, g: 1, b: 0.3, a: 0.45}
+  invalidColor: {r: 1, g: 0.25, b: 0.2, a: 0.45}
