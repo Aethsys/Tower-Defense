@@ -232,6 +232,7 @@ GameObject:
   - component: {fileID: 7100000000000000001}
   - component: {fileID: 7100000000000000002}
   - component: {fileID: 7400000000000000001}
+  - component: {fileID: 7500000000000000001}
   m_Layer: 3
   m_Name: Player
   m_TagString: Player
@@ -789,13 +790,33 @@ MonoBehaviour:
     prefab: {fileID: 3291058244431604233, guid: 8e8b46f4fd61692479c5f41811a656bb, type: 3}
   cameraTransform: {fileID: 5806711191497860550}
   playerCombat: {fileID: 245877465374703774}
+  playerMovement: {fileID: -48368246804969069}
   groundLayers:
     serializedVersion: 2
     m_Bits: 1
   maxPlaceDistance: 8
   minGroundNormalY: 0.7
   clearRadius: 1.2
-  placeCooldown: 1.5
+  placeCooldown: 40
   maxTowersPerType: 5
+  buildSound: {fileID: 11400000, guid: b4e7a2d93f1c4580a6d2e9c1b7f30a85, type: 2}
+  buildDuration: 4
+  hammerInterval: 0.7
   validColor: {r: 0.2, g: 1, b: 0.3, a: 0.45}
   invalidColor: {r: 1, g: 0.25, b: 0.2, a: 0.45}
+--- !u!114 &7500000000000000001
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4514735115878929704}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6e1a4c8f2b7d4930b5a9d0e3c8f71b25, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::PauseMenu
+  mainMenuSceneName: Main Menu
+  panelColor: {r: 0, g: 0, b: 0, a: 0.65}
+  buttonColor: {r: 0.95, g: 0.95, b: 0.95, a: 1}
+  buttonTextColor: {r: 0.1, g: 0.1, b: 0.1, a: 1}

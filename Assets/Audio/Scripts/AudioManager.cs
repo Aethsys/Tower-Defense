@@ -18,6 +18,8 @@ public class AudioManager : MonoBehaviour
     [SerializeField] int poolSize = 12;
 
     AudioSource[] pool;
+    AudioSource[] spatialPool;
+    int nextSpatial;
     readonly List<AudioSource> ambienceSources = new List<AudioSource>();
     int next;
 
@@ -35,6 +37,17 @@ public class AudioManager : MonoBehaviour
             pool[i].outputAudioMixerGroup = sfxGroup;
             pool[i].playOnAwake = false;
         }
+        spatialPool = new AudioSource[poolSize];
+        for (int i = 0; i < poolSize; i++)
+        {
+            var child = new GameObject("SFX3D_" + i).transform;
+            child.SetParent(transform, false);
+            spatialPool[i] = child.gameObject.AddComponent<AudioSource>();
+            spatialPool[i].outputAudioMixerGroup = sfxGroup;
+            spatialPool[i].playOnAwake = false;
+            spatialPool[i].spatialBlend = 1f;
+            spatialPool[i].maxDistance = 30f;
+        }
         musicSource.outputAudioMixerGroup = musicGroup;
     }
 
@@ -43,6 +56,18 @@ public class AudioManager : MonoBehaviour
         if (s == null || s.clips.Length == 0) return;
         var src = pool[next];
         next = (next + 1) % pool.Length;
+        src.clip = s.clips[Random.Range(0, s.clips.Length)];
+        src.volume = s.volume;
+        src.pitch = Random.Range(s.pitchRange.x, s.pitchRange.y);
+        src.Play();
+    }
+
+    public void PlaySFXAt(SoundData s, Vector3 position)
+    {
+        if (s == null || s.clips.Length == 0) return;
+        var src = spatialPool[nextSpatial];
+        nextSpatial = (nextSpatial + 1) % spatialPool.Length;
+        src.transform.position = position;
         src.clip = s.clips[Random.Range(0, s.clips.Length)];
         src.volume = s.volume;
         src.pitch = Random.Range(s.pitchRange.x, s.pitchRange.y);

@@ -153,6 +153,11 @@ public class PlayerMovement : NetworkBehaviour
     public float SprintSpeed => sprintSpeed;
     public bool IsGameplayScene => isGameplayScene;
 
+    /// <summary>Cuando es true, se ignoran el movimiento y el salto (por ejemplo, mientras se construye una torre).</summary>
+    public bool MovementLocked { get; set; }
+
+    private bool InputBlocked => MovementLocked || PauseMenu.IsOpen;
+
     /// <summary>True si este jugador lo controla la máquina local y estamos en una escena de juego.</summary>
     public bool IsLocallyControlled => isGameplayScene && (!IsSpawned || IsOwner);
 
@@ -501,7 +506,7 @@ public class PlayerMovement : NetworkBehaviour
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
         }
-        else if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame && Cursor.lockState != CursorLockMode.Locked)
+        else if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame && Cursor.lockState != CursorLockMode.Locked && !PauseMenu.IsOpen)
         {
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
@@ -572,7 +577,7 @@ public class PlayerMovement : NetworkBehaviour
         }
 
         // ---- Input
-        Vector2 moveInput = moveAction.ReadValue<Vector2>();
+        Vector2 moveInput = InputBlocked ? Vector2.zero : moveAction.ReadValue<Vector2>();
         if (moveInput.sqrMagnitude > 1f)
         {
             moveInput.Normalize();
@@ -610,7 +615,7 @@ public class PlayerMovement : NetworkBehaviour
         horizontalVelocity = Vector3.MoveTowards(horizontalVelocity, desiredVelocity, accelRate * dt);
 
         // ---- Salto con coyote time + jump buffer
-        if (jumpAction.WasPressedThisFrame())
+        if (!InputBlocked && jumpAction.WasPressedThisFrame())
         {
             lastJumpPressedTime = Time.time;
         }

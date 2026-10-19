@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
@@ -22,6 +23,7 @@ public class TowerBuilder : NetworkBehaviour
     [SerializeField] private TowerOption[] options;
     [SerializeField] private Transform cameraTransform;
     [SerializeField] private PlayerCombat playerCombat;
+    [SerializeField] private PlayerMovement playerMovement;
 
     [Header("Placement")]
     [SerializeField] private LayerMask groundLayers = 1;
@@ -29,9 +31,16 @@ public class TowerBuilder : NetworkBehaviour
     [SerializeField, Range(0f, 1f)] private float minGroundNormalY = 0.7f;
     [SerializeField, Min(0.1f)] private float clearRadius = 1.2f;
 
+    [Header("Construction")]
+    [SerializeField, Min(0.5f)] private float buildDuration = 4f;
+    [SerializeField, Min(0.2f)] private float hammerInterval = 0.7f;
+
     [Header("Limits")]
-    [SerializeField, Min(0f)] private float placeCooldown = 1.5f;
+    [SerializeField, Min(0f)] private float placeCooldown = 40f;
     [SerializeField, Min(1)] private int maxTowersPerType = 5;
+
+    [Header("Audio")]
+    [SerializeField] private SoundData buildSound;
 
     [Header("Preview")]
     [SerializeField] private Color validColor = new Color(0.2f, 1f, 0.3f, 0.45f);
@@ -44,6 +53,9 @@ public class TowerBuilder : NetworkBehaviour
     private float nextPlaceTime;
     private float serverNextPlaceTime;
     private bool canPlaceNow;
+    private bool isBuilding;
+    private float buildEndsAt;
+    private bool serverBuilding;
     private GUIStyle labelStyle;
 
     private bool IsLocalControl => !IsSpawned || IsOwner;
@@ -59,6 +71,11 @@ public class TowerBuilder : NetworkBehaviour
         if (playerCombat == null)
         {
             playerCombat = GetComponent<PlayerCombat>();
+        }
+
+        if (playerMovement == null)
+        {
+            playerMovement = GetComponent<PlayerMovement>();
         }
     }
 
@@ -97,6 +114,12 @@ public class TowerBuilder : NetworkBehaviour
         Mouse mouse = Mouse.current;
         if (keyboard == null || mouse == null) return;
 
+        if (isBuilding)
+        {
+            if (Time.time >= buildEndsAt + 2f) EndBuild();
+            return;
+        }
+
         HandleSelectionInput(keyboard);
 
         if (selectedIndex < 0) return;
@@ -111,7 +134,8 @@ public class TowerBuilder : NetworkBehaviour
 
         if (mouse.leftButton.wasPressedThisFrame && canPlaceNow && Time.time >= nextPlaceTime)
         {
-            nextPlaceTime = Time.time + placeCooldown;
+            nextPlaceTime = Time.time + buildDuration + placeCooldown;
+            StartBuild();
             PlaceTowerServerRpc(selectedIndex, ghosts[selectedIndex].transform.position, ghosts[selectedIndex].transform.eulerAngles.y);
         }
     }
@@ -143,8 +167,34 @@ public class TowerBuilder : NetworkBehaviour
         if (playerCombat != null) playerCombat.enabled = false;
     }
 
+    private void StartBuild()
+    {
+        isBuilding = true;
+        buildEndsAt = Time.time + buildDuration;
+        SetMovementLocked(true);
+        ApplyGhostMaterial(ghosts[selectedIndex], validMaterial);
+    }
+
+    private void EndBuild()
+    {
+        isBuilding = false;
+        SetMovementLocked(false);
+        CancelBuild();
+    }
+
+    private void SetMovementLocked(bool locked)
+    {
+        if (playerMovement != null) playerMovement.MovementLocked = locked;
+    }
+
     private void CancelBuild()
     {
+        if (isBuilding)
+        {
+            isBuilding = false;
+            SetMovementLocked(false);
+        }
+
         if (selectedIndex < 0) return;
 
         selectedIndex = -1;
@@ -159,7 +209,7 @@ public class TowerBuilder : NetworkBehaviour
         bool hasSpot = TryGetPlacement(out Vector3 position, out Quaternion rotation);
 
         ghost.SetActive(hasSpot);
-        canPlaceNow = hasSpot && IsSpotClear(position);
+        canPlaceNow = hasSpot && Time.time >= nextPlaceTime && IsSpotClear(position);
 
         if (!hasSpot) return;
 
@@ -220,22 +270,64 @@ public class TowerBuilder : NetworkBehaviour
         NetworkObject prefab = options[optionIndex].prefab;
         if (prefab == null) return;
 
-        if (Time.time < serverNextPlaceTime) return;
-        if ((position - transform.position).magnitude > maxPlaceDistance + 3f) return;
-        if (!IsSpotClear(position)) return;
-        if (CountAlive(prefab) >= maxTowersPerType) return;
+        bool valid = !serverBuilding &&
+                     Time.time >= serverNextPlaceTime &&
+                     (position - transform.position).magnitude <= maxPlaceDistance + 3f &&
+                     IsSpotClear(position) &&
+                     CountAlive(prefab) < maxTowersPerType;
 
-        serverNextPlaceTime = Time.time + placeCooldown;
-
-        NetworkObject tower = Instantiate(prefab, position, Quaternion.Euler(0f, yaw, 0f));
-        tower.Spawn();
-
-        if (!SpawnedByPrefab.TryGetValue(prefab, out List<NetworkObject> list))
+        if (!valid)
         {
-            list = new List<NetworkObject>(maxTowersPerType);
-            SpawnedByPrefab[prefab] = list;
+            BuildFinishedRpc();
+            return;
         }
-        list.Add(tower);
+
+        serverBuilding = true;
+        serverNextPlaceTime = Time.time + buildDuration + placeCooldown;
+        StartCoroutine(BuildRoutine(prefab, position, yaw));
+    }
+
+    private IEnumerator BuildRoutine(NetworkObject prefab, Vector3 position, float yaw)
+    {
+        float elapsed = 0f;
+        while (elapsed < buildDuration)
+        {
+            PlayBuildSoundRpc(position);
+            float wait = Mathf.Min(hammerInterval, buildDuration - elapsed);
+            yield return new WaitForSeconds(wait);
+            elapsed += wait;
+        }
+
+        if (IsSpotClear(position) && CountAlive(prefab) < maxTowersPerType)
+        {
+            NetworkObject tower = Instantiate(prefab, position, Quaternion.Euler(0f, yaw, 0f));
+            tower.Spawn();
+
+            if (!SpawnedByPrefab.TryGetValue(prefab, out List<NetworkObject> list))
+            {
+                list = new List<NetworkObject>(maxTowersPerType);
+                SpawnedByPrefab[prefab] = list;
+            }
+            list.Add(tower);
+        }
+
+        serverBuilding = false;
+        BuildFinishedRpc();
+    }
+
+    [Rpc(SendTo.Owner)]
+    private void BuildFinishedRpc()
+    {
+        EndBuild();
+    }
+
+    [Rpc(SendTo.ClientsAndHost)]
+    private void PlayBuildSoundRpc(Vector3 position)
+    {
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlaySFXAt(buildSound, position);
+        }
     }
 
     private static int CountAlive(NetworkObject prefab)
@@ -345,7 +437,12 @@ public class TowerBuilder : NetworkBehaviour
         }
 
         string text;
-        if (selectedIndex >= 0)
+        if (isBuilding)
+        {
+            float left = Mathf.Max(0f, buildEndsAt - Time.time);
+            text = "Construyendo " + options[selectedIndex].displayName + "...   " + left.ToString("0.0") + " s";
+        }
+        else if (selectedIndex >= 0)
         {
             text = "Construyendo: " + options[selectedIndex].displayName + "   |   Clic izquierdo: colocar   |   Q: cancelar";
         }
@@ -358,6 +455,24 @@ public class TowerBuilder : NetworkBehaviour
             }
         }
 
+        float remaining = isBuilding ? 0f : nextPlaceTime - Time.time;
+        if (remaining > 0f)
+        {
+            text += "   |   Enfriamiento: " + remaining.ToString("0.0") + " s";
+        }
+
         GUI.Label(new Rect(16f, Screen.height - 36f, Screen.width - 32f, 28f), text, labelStyle);
+
+        if (remaining > 0f && placeCooldown > 0f)
+        {
+            float width = 220f;
+            float fill = 1f - Mathf.Clamp01(remaining / placeCooldown);
+            Rect bar = new Rect(16f, Screen.height - 54f, width, 10f);
+            GUI.color = new Color(0f, 0f, 0f, 0.6f);
+            GUI.DrawTexture(bar, Texture2D.whiteTexture);
+            GUI.color = new Color(0.3f, 0.9f, 0.4f, 0.95f);
+            GUI.DrawTexture(new Rect(bar.x, bar.y, width * fill, bar.height), Texture2D.whiteTexture);
+            GUI.color = Color.white;
+        }
     }
 }
