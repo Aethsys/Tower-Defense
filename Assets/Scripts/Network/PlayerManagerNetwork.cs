@@ -1,60 +1,84 @@
-using System;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
+#pragma warning disable CS0649
+[DefaultExecutionOrder(-500)]
+[DisallowMultipleComponent]
 public class PlayerManagerNetwork : MonoBehaviour
 {
     [Header("Map Spawn Points")]
+    [Tooltip("Contenedor padre opcional con los puntos de spawn en el mapa.")]
+    [SerializeField] private Transform spawnPointsRoot;
     [SerializeField] private Transform[] spawnPoints;
     [SerializeField] private NetworkObject playerPrefab;
 
-    private static readonly Comparison<NetworkObject> CompareByOwnerClientId =
-        (a, b) => a.OwnerClientId.CompareTo(b.OwnerClientId);
-
-    private static readonly Comparison<Transform> CompareSpawnTransform = (a, b) =>
-    {
-        string parentA = a.parent != null ? a.parent.name : string.Empty;
-        string parentB = b.parent != null ? b.parent.name : string.Empty;
-        int parentCmp = string.CompareOrdinal(parentA, parentB);
-        return parentCmp != 0 ? parentCmp : string.CompareOrdinal(a.name, b.name);
-    };
+    [Header("Scene Transitions")]
+    [Tooltip("Duración del fade in desde negro al iniciar la partida.")]
+    [SerializeField] private float fadeInDuration = 0.4f;
+    [Tooltip("Si es true, realiza un fade in suave desde negro al entrar a la escena de partida.")]
+    [SerializeField] private bool fadeInOnStart = true;
+    [Tooltip("Nombre de la escena del menú principal a la que volver si el host se desconecta.")]
+    [SerializeField] private string mainMenuSceneName = "Main Menu";
 
     private readonly HashSet<ulong> positionedClientIds = new HashSet<ulong>();
     private readonly List<NetworkObject> playerObjectsBuffer = new List<NetworkObject>(4);
+    private System.Func<bool> isRevealCancelled;
     private bool needsCoordination = true;
+    private bool isLeaving;
 
     private void Awake()
     {
         useGUILayout = false;
+        isRevealCancelled = () => this == null || isLeaving;
+
+        SceneTransitionOverlay overlay = SceneTransitionOverlay.Instance;
+        if (overlay != null)
+        {
+            overlay.SetBlack();
+        }
 
         if (spawnPoints == null || spawnPoints.Length == 0)
         {
-            AutoFindSpawnPoints();
+            spawnPoints = NetworkPlayerUtility.FindSpawnPoints(spawnPointsRoot, NetworkPlayerUtility.CompareByParentThenName);
         }
+        NetworkPlayerUtility.SetActiveSceneSpawnPoints(spawnPoints);
     }
 
-    private void Start()
+    private async void Start()
     {
-        if (NetworkManager.Singleton != null)
+        NetworkPlayerUtility.OnAnyPlayerSpawned += OnAnyPlayerSpawned;
+
+        NetworkManager nm = NetworkManager.Singleton;
+        if (nm != null)
         {
-            NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
-            NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnected;
+            nm.OnClientConnectedCallback += OnClientConnected;
+            nm.OnClientDisconnectCallback += OnClientDisconnected;
 
-            if (NetworkManager.Singleton.SceneManager != null)
+            if (nm.SceneManager != null)
             {
-                NetworkManager.Singleton.SceneManager.OnLoadEventCompleted += OnSceneLoadCompleted;
-                NetworkManager.Singleton.SceneManager.OnSynchronizeComplete += OnSynchronizeComplete;
+                nm.SceneManager.OnLoadEventCompleted += OnSceneLoadCompleted;
+                nm.SceneManager.OnSynchronizeComplete += OnSynchronizeComplete;
             }
 
-            if (NetworkManager.Singleton.IsServer)
-            {
-                EnsureAllConnectedPlayersSpawned();
-            }
+            NetworkPlayerUtility.EnsureAllConnectedPlayersSpawned(playerPrefab, spawnPoints);
         }
 
         CoordinatePlayersStartPositions(forceRepositionAll: true);
+
+        // Esperar a que transforms, físicas y cámaras de la escena terminen de asentarse (2 frames reales)
+        await Awaitable.NextFrameAsync();
+        await Awaitable.NextFrameAsync();
+
+        if (this == null || !Application.isPlaying || isLeaving || !fadeInOnStart) return;
+
+        // Revelar suavemente la partida si venía de un fundido a negro
+        SceneTransitionOverlay overlay = SceneTransitionOverlay.Instance;
+        if (overlay != null)
+        {
+            await overlay.RevealSceneAsync(fadeInDuration, isRevealCancelled);
+        }
     }
 
     private void Update()
@@ -67,44 +91,24 @@ public class PlayerManagerNetwork : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (NetworkManager.Singleton != null)
+        NetworkPlayerUtility.OnAnyPlayerSpawned -= OnAnyPlayerSpawned;
+
+        NetworkManager nm = NetworkManager.Singleton;
+        if (nm == null) return;
+
+        nm.OnClientConnectedCallback -= OnClientConnected;
+        nm.OnClientDisconnectCallback -= OnClientDisconnected;
+
+        if (nm.SceneManager != null)
         {
-            NetworkManager.Singleton.OnClientConnectedCallback -= OnClientConnected;
-            NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnected;
-
-            if (NetworkManager.Singleton.SceneManager != null)
-            {
-                NetworkManager.Singleton.SceneManager.OnLoadEventCompleted -= OnSceneLoadCompleted;
-                NetworkManager.Singleton.SceneManager.OnSynchronizeComplete -= OnSynchronizeComplete;
-            }
+            nm.SceneManager.OnLoadEventCompleted -= OnSceneLoadCompleted;
+            nm.SceneManager.OnSynchronizeComplete -= OnSynchronizeComplete;
         }
-    }
-
-    private void AutoFindSpawnPoints()
-    {
-        Transform[] allTransforms = FindObjectsByType<Transform>();
-        List<Transform> found = new List<Transform>(4);
-
-        for (int i = 0; i < allTransforms.Length; i++)
-        {
-            Transform t = allTransforms[i];
-            if (t != null && t.name.StartsWith("spawn", StringComparison.OrdinalIgnoreCase))
-            {
-                found.Add(t);
-            }
-        }
-
-        found.Sort(CompareSpawnTransform);
-        spawnPoints = found.ToArray();
     }
 
     private void OnSceneLoadCompleted(string sceneName, LoadSceneMode loadSceneMode, List<ulong> clientsCompleted, List<ulong> clientsTimedOut)
     {
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
-        {
-            EnsureAllConnectedPlayersSpawned();
-        }
-
+        NetworkPlayerUtility.EnsureAllConnectedPlayersSpawned(playerPrefab, spawnPoints);
         CoordinatePlayersStartPositions(forceRepositionAll: true);
     }
 
@@ -113,12 +117,15 @@ public class PlayerManagerNetwork : MonoBehaviour
         CoordinatePlayersStartPositions(forceRepositionAll: true);
     }
 
+    private void OnAnyPlayerSpawned()
+    {
+        needsCoordination = true;
+        CoordinatePlayersStartPositions(forceRepositionAll: false);
+    }
+
     private void OnClientConnected(ulong clientId)
     {
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
-        {
-            EnsurePlayerSpawned(clientId);
-        }
+        NetworkPlayerUtility.EnsurePlayerSpawned(clientId, playerPrefab, spawnPoints);
 
         positionedClientIds.Remove(clientId);
         needsCoordination = true;
@@ -128,59 +135,52 @@ public class PlayerManagerNetwork : MonoBehaviour
     private void OnClientDisconnected(ulong clientId)
     {
         positionedClientIds.Remove(clientId);
-    }
 
-    private void EnsureAllConnectedPlayersSpawned()
-    {
-        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
-
-        IReadOnlyList<ulong> clientIds = NetworkManager.Singleton.ConnectedClientsIds;
-        for (int i = 0; i < clientIds.Count; i++)
+        NetworkManager nm = NetworkManager.Singleton;
+        if (nm != null && !nm.IsServer &&
+            (clientId == nm.LocalClientId || clientId == NetworkManager.ServerClientId))
         {
-            EnsurePlayerSpawned(clientIds[i]);
+            HandleDisconnectFromGame();
         }
     }
 
-    private void EnsurePlayerSpawned(ulong clientId)
+    private async void HandleDisconnectFromGame()
     {
-        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
+        if (isLeaving || !Application.isPlaying) return;
+        isLeaving = true;
 
-        if (!NetworkManager.Singleton.ConnectedClients.TryGetValue(clientId, out NetworkClient networkClient))
+        SceneTransitionOverlay overlay = SceneTransitionOverlay.Instance;
+        if (overlay != null)
         {
-            return;
+            await overlay.FadeOutAsync(0.35f);
         }
 
-        if (networkClient.PlayerObject != null)
+        var session = MenuManagerNetwork.CurrentSession;
+        if (session != null && session.State == Unity.Services.Multiplayer.SessionState.Connected)
         {
-            return;
+            try
+            {
+                await session.LeaveAsync();
+            }
+            catch
+            {
+                // Ignorar errores al cerrar sesión tras desconexión del host
+            }
         }
 
-        GameObject prefabToSpawn = playerPrefab != null
-            ? playerPrefab.gameObject
-            : NetworkManager.Singleton.NetworkConfig.PlayerPrefab;
+        MenuSharedUtility.ShutdownNetworkIfActive();
+        MenuManagerNetwork.ClearCurrentSession();
 
-        if (prefabToSpawn == null)
+        if (!MenuSharedUtility.IsShuttingDown(false))
         {
-            Debug.LogWarning("No PlayerPrefab assigned in PlayerManagerNetwork or NetworkManager.");
-            return;
-        }
-
-        int index = GetPlayerIndex(clientId);
-        Transform spawn = GetSpawnPoint(index);
-        Vector3 pos = spawn != null ? spawn.position : Vector3.zero;
-        Quaternion rot = spawn != null ? spawn.rotation : Quaternion.identity;
-
-        GameObject instance = Instantiate(prefabToSpawn, pos, rot);
-        NetworkObject netObj = instance.GetComponent<NetworkObject>();
-        if (netObj != null)
-        {
-            netObj.SpawnAsPlayerObject(clientId, true);
+            SceneManager.LoadScene(mainMenuSceneName, LoadSceneMode.Single);
         }
     }
 
     public void CoordinatePlayersStartPositions(bool forceRepositionAll)
     {
-        if (NetworkManager.Singleton == null || NetworkManager.Singleton.SpawnManager == null)
+        NetworkManager nm = NetworkManager.Singleton;
+        if (nm == null || nm.SpawnManager == null)
         {
             return;
         }
@@ -191,138 +191,39 @@ public class PlayerManagerNetwork : MonoBehaviour
             needsCoordination = true;
         }
 
-        playerObjectsBuffer.Clear();
-        var spawnedList = NetworkManager.Singleton.SpawnManager.SpawnedObjectsList;
-        foreach (NetworkObject obj in spawnedList)
-        {
-            if (obj != null && obj.IsPlayerObject)
-            {
-                playerObjectsBuffer.Add(obj);
-            }
-        }
-
-        if (playerObjectsBuffer.Count == 0)
+        NetworkPlayerUtility.CollectSpawnedPlayers(playerObjectsBuffer);
+        int playerCount = playerObjectsBuffer.Count;
+        if (playerCount == 0)
         {
             return;
         }
 
-        if (playerObjectsBuffer.Count > 1)
-        {
-            playerObjectsBuffer.Sort(CompareByOwnerClientId);
-        }
-
-        bool allPositioned = true;
-        for (int i = 0; i < playerObjectsBuffer.Count; i++)
+        for (int i = 0; i < playerCount; i++)
         {
             NetworkObject playerObj = playerObjectsBuffer[i];
-            ulong ownerId = playerObj.OwnerClientId;
-
-            if (positionedClientIds.Add(ownerId))
+            if (!positionedClientIds.Add(playerObj.OwnerClientId))
             {
-                ConfigurePlayerCamera(playerObj, playerObj.IsOwner);
-
-                Transform spawn = GetSpawnPoint(i);
-                if (spawn != null)
-                {
-                    PlacePlayerAtSpawn(playerObj, spawn);
-                }
+                continue;
             }
 
-            if (!positionedClientIds.Contains(ownerId))
+            NetworkPlayerUtility.SetPlayerLocalComponentsActive(playerObj, playerObj.IsOwner);
+
+            int spawnIndex = NetworkPlayerUtility.GetPlayerIndex(playerObj.OwnerClientId);
+            Transform spawn = NetworkPlayerUtility.GetSpawnPoint(spawnPoints, spawnIndex);
+            if (spawn != null)
             {
-                allPositioned = false;
+                NetworkPlayerUtility.PlaceAtSpawn(playerObj, spawn, reenableController: true);
             }
         }
 
-        int expectedPlayers = NetworkManager.Singleton.IsServer
-            ? NetworkManager.Singleton.ConnectedClientsIds.Count
-            : playerObjectsBuffer.Count;
-
-        if (allPositioned && positionedClientIds.Count >= expectedPlayers && expectedPlayers > 0)
+        // Una vez colocados todos los jugadores esperados se deja de sondear en Update.
+        // (Si no hay spawn points no hay nada que reintentar, así que también se detiene.)
+        int expectedPlayers = NetworkPlayerUtility.GetExpectedPlayerCount(playerCount);
+        if (expectedPlayers > 0 && positionedClientIds.Count >= expectedPlayers)
         {
             needsCoordination = false;
         }
-    }
 
-    private void PlacePlayerAtSpawn(NetworkObject playerObj, Transform spawn)
-    {
-        CharacterController cc = playerObj.GetComponent<CharacterController>();
-        if (cc != null)
-        {
-            cc.enabled = false;
-        }
-
-        playerObj.transform.SetPositionAndRotation(spawn.position, spawn.rotation);
-
-        if (cc != null)
-        {
-            cc.enabled = true;
-        }
-    }
-
-    private void ConfigurePlayerCamera(NetworkObject playerObj, bool isLocalOwner)
-    {
-        Camera[] cameras = playerObj.GetComponentsInChildren<Camera>(true);
-        for (int i = 0; i < cameras.Length; i++)
-        {
-            Camera cam = cameras[i];
-            if (cam.enabled != isLocalOwner)
-            {
-                cam.enabled = isLocalOwner;
-            }
-
-            if (isLocalOwner && !cam.gameObject.activeSelf)
-            {
-                cam.gameObject.SetActive(true);
-            }
-        }
-
-        AudioListener[] listeners = playerObj.GetComponentsInChildren<AudioListener>(true);
-        for (int i = 0; i < listeners.Length; i++)
-        {
-            AudioListener listener = listeners[i];
-            if (listener.enabled != isLocalOwner)
-            {
-                listener.enabled = isLocalOwner;
-            }
-        }
-
-        Canvas[] canvases = playerObj.GetComponentsInChildren<Canvas>(true);
-        for (int i = 0; i < canvases.Length; i++)
-        {
-            Canvas canvas = canvases[i];
-            if (canvas.enabled != isLocalOwner)
-            {
-                canvas.enabled = isLocalOwner;
-            }
-        }
-    }
-
-    private int GetPlayerIndex(ulong clientId)
-    {
-        if (NetworkManager.Singleton == null) return 0;
-
-        int index = 0;
-        IReadOnlyList<ulong> connectedIds = NetworkManager.Singleton.ConnectedClientsIds;
-        for (int i = 0; i < connectedIds.Count; i++)
-        {
-            if (connectedIds[i] < clientId)
-            {
-                index++;
-            }
-        }
-
-        return index;
-    }
-
-    private Transform GetSpawnPoint(int index)
-    {
-        if (spawnPoints == null || spawnPoints.Length == 0)
-        {
-            return null;
-        }
-
-        int clampedIndex = Mathf.Clamp(index, 0, spawnPoints.Length - 1);
-        return spawnPoints[clampedIndex];
+        playerObjectsBuffer.Clear();
     }
 }
